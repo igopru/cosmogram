@@ -472,3 +472,4 @@ journalctl -u nginx -f
 ## Лицензия
 
 MIT License
+# cosmogram
