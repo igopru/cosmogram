@@ -1,0 +1,29 @@
+[Unit]
+Description=Cosmogram Media Gallery Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/cosmogram
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cosmogram
+
+# Limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/path/to/cosmogram/data /path/to/cosmogram/uploads
+
+# Environment
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

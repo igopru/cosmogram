@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Media Gallery</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app">
+        <header class="header">
+            <h1>MediaGallery</h1>
+            <div class="header-actions">
+                <button id="themeToggle" title="Toggle theme">🌙</button>
+                <button id="uploadBtn" style="display: none;" title="New Post">📷</button>
+                <button id="profileBtn" style="display: none;" title="Profile">👤</button>
+                <button id="logoutBtn" style="display: none;" title="Logout">🚪</button>
+            </div>
+        </header>
+
+        <main id="content">
+            <!-- Auth Form -->
+            <div id="authForm" class="auth-container">
+                <h2>Welcome Back</h2>
+                <div id="loginError" class="error-message" style="display: none;"></div>
+                <input type="email" id="email" placeholder="Email" required>
+                <input type="password" id="password" placeholder="Password" required>
+                <button id="loginBtn">Sign In</button>
+                <p>Don't have an account? <a href="#" id="showRegister">Sign Up</a></p>
+            </div>
+
+            <!-- Register Form -->
+            <div id="registerForm" class="auth-container" style="display: none;">
+                <h2>Create Account</h2>
+                <div id="registerError" class="error-message" style="display: none;"></div>
+                <input type="text" id="regUsername" placeholder="Username" required>
+                <input type="email" id="regEmail" placeholder="Email" required>
+                <input type="text" id="regFullname" placeholder="Full Name (optional)">
+                <input type="password" id="regPassword" placeholder="Password (min. 8 characters)" required>
+                <button id="registerBtn">Sign Up</button>
+                <p>Already have an account? <a href="#" id="showLogin">Sign In</a></p>
+            </div>
+
+            <!-- Feed -->
+            <div id="feed" style="display: none;"></div>
+
+            <!-- Upload Modal -->
+            <div id="uploadModal" class="modal" style="display: none;">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h2>Create New Post</h2>
+                        <button class="modal-close" id="closeUpload">&times;</button>
+                    </div>
+                    <div id="uploadError" class="error-message" style="display: none;"></div>
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="mediaInput" accept="image/*,video/*" hidden>
+                        <label for="mediaInput" class="upload-label">
+                            <span class="upload-icon">📁</span>
+                            <span>Click to select media</span>
+                            <span class="upload-hint">JPEG, PNG, WebP, GIF, MP4, WebM (max 10MB)</span>
+                        </label>
+                        <div id="previewContainer" class="preview-container" style="display: none;"></div>
+                    </div>
+                    <textarea id="captionInput" placeholder="Write a caption..." maxlength="2200"></textarea>
+                    <div class="char-count"><span id="charCount">0</span>/2200</div>
+                    <button id="uploadSubmit" class="upload-submit" disabled>Publish</button>
+                </div>
+            </div>
+
+            <!-- Profile Modal -->
+            <div id="profileModal" class="modal" style="display: none;">
+                <div class="modal-content profile-content">
+                    <div class="modal-header">
+                        <h2>Profile</h2>
+                        <button class="modal-close" id="closeProfile">&times;</button>
+                    </div>
+                    <div class="profile-info">
+                        <div class="profile-avatar" id="profileAvatar">👤</div>
+                        <h3 id="profileUsername"></h3>
+                        <p id="profileFullname" class="profile-fullname"></p>
+                        <p id="profileEmail" class="profile-email"></p>
+                        <div class="profile-stats">
+                            <div class="stat">
+                                <span id="postsCount">0</span>
+                                <span>Posts</span>
+                            </div>
+                            <div class="stat">
+                                <span id="followersCount">0</span>
+                                <span>Followers</span>
+                            </div>
+                            <div class="stat">
+                                <span id="followingCount">0</span>
+                                <span>Following</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
