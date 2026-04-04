@@ -580,6 +580,60 @@ const charCount = document.getElementById('charCount');
 const uploadSubmit = document.getElementById('uploadSubmit');
 const uploadError = document.getElementById('uploadError');
 
+// Настройки сжатия изображений на клиенте
+const IMAGE_RESIZE_CONFIG = {
+    maxWidth: 1920,
+    maxHeight: 1920,
+    quality: 0.82,          // JPEG качество
+    outputType: 'image/jpeg'
+};
+
+/**
+ * Сжимает изображение через Canvas.
+ * @param {File} file — оригинальный файл
+ * @returns {Promise<Blob>} — сжатый JPEG
+ */
+function resizeImage(file) {
+    return new Promise((resolve, reject) => {
+        // Видео не сжимаем
+        if (file.type.startsWith('video/')) return resolve(file);
+
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(img.src);
+
+            let { width, height } = img;
+            const { maxWidth, maxHeight } = IMAGE_RESIZE_CONFIG;
+
+            // Уменьшаем, если больше максимума
+            if (width > maxWidth || height > maxHeight) {
+                const ratio = Math.min(maxWidth / width, maxHeight / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, width, height);
+
+            canvas.toBlob(
+                (blob) => {
+                    if (blob) resolve(blob);
+                    else reject(new Error('Canvas toBlob failed'));
+                },
+                IMAGE_RESIZE_CONFIG.outputType,
+                IMAGE_RESIZE_CONFIG.quality
+            );
+        };
+        img.onerror = () => reject(new Error('Failed to load image'));
+        img.src = URL.createObjectURL(file);
+    });
+}
+
 uploadBtn?.addEventListener('click', () => {
     uploadModal.style.display = 'flex';
     resetUploadForm();
@@ -666,12 +720,28 @@ uploadSubmit?.addEventListener('click', async () => {
     if (!selectedMedia) return;
 
     uploadSubmit.disabled = true;
-    uploadSubmit.textContent = 'Publishing...';
+    uploadSubmit.textContent = 'Processing...';
     uploadError.style.display = 'none';
 
     try {
+        // Сжимаем изображение перед отправкой (только для картинок)
+        let uploadFile = selectedMedia;
+        const originalSize = selectedMedia.size;
+
+        if (selectedMedia.type.startsWith('image/')) {
+            uploadSubmit.textContent = 'Compressing...';
+            uploadFile = await resizeImage(selectedMedia);
+
+            const compressedSize = uploadFile.size;
+            const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(0);
+            console.log(`Image compressed: ${originalSize >> 10}KB → ${compressedSize >> 10}KB (${ratio}% smaller)`);
+        }
+
+        uploadSubmit.textContent = 'Publishing...';
+
         const formData = new FormData();
-        formData.append('media', selectedMedia);
+        const fileName = uploadFile.type.startsWith('image/') ? `upload_${Date.now()}.jpg` : selectedMedia.name;
+        formData.append('media', uploadFile, fileName);
         if (captionInput.value.trim()) {
             formData.append('description', captionInput.value.trim());
         }
