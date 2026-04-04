@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/path/to/cosmogram
+WorkingDirectory=/opt/cosmogram
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
@@ -20,7 +20,7 @@ LimitNPROC=4096
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/path/to/cosmogram/data /path/to/cosmogram/uploads
+ReadWritePaths=/opt/cosmogram/data /opt/cosmogram/uploads
 
 # Environment
 Environment=NODE_ENV=production

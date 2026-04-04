@@ -24,12 +24,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 8000;
-const db = initDatabase();
 
-// Доверять прокси (nginx) — нужно для определения https, правильного хоста и кук
-app.set('trust proxy', true);
-
-// Создание папок
+// Создание папок (ДО инициализации БД!)
 const uploadDirs = ['uploads/images', 'uploads/thumbnails', 'uploads/videos', 'data'];
 uploadDirs.forEach(dir => {
     const fullPath = path.join(__dirname, dir);
@@ -37,6 +33,11 @@ uploadDirs.forEach(dir => {
         fs.mkdirSync(fullPath, { recursive: true });
     }
 });
+
+const db = initDatabase();
+
+// Доверять прокси (nginx)
+app.set('trust proxy', true);
 
 // Security middleware
 app.use(helmet({
@@ -105,6 +106,8 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
             res.set('Content-Type', 'video/quicktime');
         } else if (filePath.endsWith('.avi')) {
             res.set('Content-Type', 'video/x-msvideo');
+        } else if (filePath.endsWith('.webp')) {
+            res.set('Content-Type', 'image/webp');
         }
     },
     // Включаем поддержку range requests для видео (seek)
