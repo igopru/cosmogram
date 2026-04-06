@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcrypt';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,12 +136,17 @@ export function initDatabase() {
 
     const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
     if (!adminExists) {
-        const passwordHash = bcrypt.hashSync('Admin123!', 12);
+        // Generate a strong random password — force change on first login
+        const tempPassword = crypto.randomBytes(8).toString('hex'); // 16 char password
+        const passwordHash = bcrypt.hashSync(tempPassword, 12);
         db.prepare(`
             INSERT INTO users (username, email, password_hash, fullname, role)
             VALUES (?, ?, ?, ?, ?)
         `).run('admin', 'admin@localhost', passwordHash, 'Administrator', 'admin');
-        console.log('✅ Admin user created: admin / Admin123!');
+        console.log('⚠️  Admin created with RANDOM password (check logs ONCE):');
+        console.log('   Username: admin');
+        console.log(`   Password: ${tempPassword}`);
+        console.log('   ⚠️  CHANGE THIS PASSWORD IMMEDIATELY!');
     }
 
     return db;

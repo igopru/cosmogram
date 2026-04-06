@@ -38,8 +38,28 @@ const upload = multer({
         files: 10  // Max 10 files per post
     },
     fileFilter: (req, file, cb) => {
+        // Validate MIME type from header
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
-        cb(null, allowedTypes.includes(file.mimetype));
+        if (!allowedTypes.includes(file.mimetype)) {
+            return cb(new Error('Invalid file type'), false);
+        }
+        
+        // Validate file extension matches MIME type (prevent double extension attacks)
+        const ext = path.extname(file.originalname).toLowerCase();
+        const validExtensions = {
+            'image/jpeg': ['.jpg', '.jpeg'],
+            'image/png': ['.png'],
+            'image/webp': ['.webp'],
+            'image/gif': ['.gif'],
+            'video/mp4': ['.mp4'],
+            'video/webm': ['.webm']
+        };
+        
+        if (!validExtensions[file.mimetype]?.includes(ext)) {
+            return cb(new Error('File extension does not match MIME type'), false);
+        }
+        
+        cb(null, true);
     }
 });
 
@@ -181,8 +201,8 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
         }
 
         const insertPost = db.prepare(`
-            INSERT INTO posts (user_id, description, allow_comments, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO posts (user_id, description, allow_comments)
+            VALUES (?, ?, ?)
         `);
 
         const insertMedia = db.prepare(`
@@ -190,14 +210,11 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
             VALUES (?, ?, ?, ?, ?)
         `);
 
-        // Определяем дату создания из body или используем текущую
-        const createdAt = req.body.created_at || new Date().toISOString();
-        
+        // NEVER accept created_at from user — always server-side
         const result = insertPost.run(
             req.userId,
             sanitizeInput(req.body.description),
-            1,
-            createdAt
+            1
         );
 
         const postId = result.lastInsertRowid;
@@ -282,17 +299,33 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
 
 router.delete('/:id', checkPostOwner, (req, res) => {
     try {
+        // Validate ID is integer
+        const postId = parseInt(req.params.id);
+        if (isNaN(postId)) {
+            return res.status(400).json({ error: 'Invalid post ID' });
+        }
+
         // Get all media files for this post
-        const mediaFiles = db.prepare('SELECT media_path, thumbnail_path FROM post_media WHERE post_id = ?').all(req.params.id);
+        const mediaFiles = db.prepare('SELECT media_path, thumbnail_path FROM post_media WHERE post_id = ?').all(postId);
+
+        // Validate paths are within expected directories
+        const allowedPrefixes = [
+            path.join(__dirname, '../uploads'),
+            path.join(__dirname, '../uploads/thumbnails')
+        ];
 
         mediaFiles.forEach(m => {
             // Delete main media file (handles both regular files and symlinks)
             if (m.media_path) {
+                const resolvedPath = path.resolve(m.media_path);
+                const isAllowed = allowedPrefixes.some(prefix => resolvedPath.startsWith(prefix));
+                if (!isAllowed) {
+                    console.error(`⚠️ Blocked suspicious file deletion: ${m.media_path}`);
+                    return; // Skip deletion if path is outside allowed directories
+                }
                 try {
-                    // lstat to check if it's a symlink before trying to delete
-                    const stat = fs.lstatSync(m.media_path);
-                    // unlink works for both symlinks and regular files
-                    fs.unlinkSync(m.media_path);
+                    const stat = fs.lstatSync(resolvedPath);
+                    fs.unlinkSync(resolvedPath);
                 } catch (e) {
                     if (e.code !== 'ENOENT') {
                         console.error(`Failed to delete media ${m.media_path}:`, e.message);
@@ -301,8 +334,14 @@ router.delete('/:id', checkPostOwner, (req, res) => {
             }
             // Delete thumbnail if exists
             if (m.thumbnail_path) {
+                const resolvedPath = path.resolve(m.thumbnail_path);
+                const isAllowed = allowedPrefixes.some(prefix => resolvedPath.startsWith(prefix));
+                if (!isAllowed) {
+                    console.error(`⚠️ Blocked suspicious thumbnail deletion: ${m.thumbnail_path}`);
+                    return;
+                }
                 try {
-                    fs.unlinkSync(m.thumbnail_path);
+                    fs.unlinkSync(resolvedPath);
                 } catch (e) {
                     if (e.code !== 'ENOENT') {
                         console.error(`Failed to delete thumbnail ${m.thumbnail_path}:`, e.message);
@@ -312,7 +351,7 @@ router.delete('/:id', checkPostOwner, (req, res) => {
         });
 
         // Delete post (cascade will delete post_media records)
-        db.prepare('DELETE FROM posts WHERE id = ?').run(req.params.id);
+        db.prepare('DELETE FROM posts WHERE id = ?').run(postId);
         res.json({ success: true });
     } catch (error) {
         console.error('Delete error:', error);

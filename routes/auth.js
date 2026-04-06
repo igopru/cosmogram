@@ -172,11 +172,14 @@ router.post('/forgot-password', async (req, res) => {
                 res.status(500).json({ error: 'Failed to send reset email' });
             }
         } else {
-            // No email configured — return token for manual use
+            // No email configured — log token server-side only, never expose to client
+            console.log(`⚠️  PASSWORD RESET TOKEN (SMTP not configured):`);
+            console.log(`   User: ${user.username} (${user.email})`);
+            console.log(`   Reset URL: ${resetUrl}`);
+            console.log(`   ⚠️  This token is SERVER-SIDE ONLY — do not share`);
             res.json({
                 success: true,
-                message: 'Email not configured. Use this reset link:',
-                resetUrl
+                message: 'Password reset requested. Contact an administrator for the reset link.'
             });
         }
     } catch (error) {

@@ -42,7 +42,14 @@ export function requireAdmin(req, res, next) {
 
 export function checkPostOwner(req, res, next) {
     const db = getDB();
-    const post = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(req.params.id);
+    
+    // Validate ID is integer
+    const postId = parseInt(req.params.id);
+    if (isNaN(postId)) {
+        return res.status(400).json({ error: 'Invalid post ID' });
+    }
+    
+    const post = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(postId);
 
     if (!post) {
         return res.status(404).json({ error: 'Post not found' });
@@ -52,5 +59,7 @@ export function checkPostOwner(req, res, next) {
         return res.status(403).json({ error: 'Not your post' });
     }
 
+    // Normalize the ID for downstream handlers
+    req.params.id = postId;
     next();
 }

@@ -1,13 +1,14 @@
 import express from 'express';
 import { getDB } from '../models/database.js';
+import { validateId } from '../middleware/validation.js';
 
 const router = express.Router();
 const db = getDB();
 
-router.post('/toggle/:postId', (req, res) => {
+router.post('/toggle/:postId', validateId, (req, res) => {
     try {
         const postId = req.params.postId;
-        
+
         const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(postId);
         if (!post) return res.status(404).json({ error: 'Post not found' });
         

@@ -1,11 +1,12 @@
 import express from 'express';
 import { getDB } from '../models/database.js';
 import { sanitizeInput } from '../middleware/security.js';
-import { validateComment } from '../middleware/validation.js';
+import { validateComment, validateId } from '../middleware/validation.js';
 
 const router = express.Router();
 const db = getDB();
 
+// Batch comments — authenticated
 router.post('/batch', (req, res) => {
     try {
         const { postIds } = req.body;
@@ -18,14 +19,20 @@ router.post('/batch', (req, res) => {
             return res.status(400).json({ error: 'Maximum 50 post IDs per request' });
         }
 
-        const placeholders = postIds.map(() => '?').join(',');
+        // Validate all postIds are integers
+        const validIds = postIds.map(id => parseInt(id)).filter(id => !isNaN(id) && id > 0);
+        if (validIds.length === 0) {
+            return res.status(400).json({ error: 'No valid post IDs provided' });
+        }
+
+        const placeholders = validIds.map(() => '?').join(',');
         const comments = db.prepare(`
             SELECT c.post_id, c.id, c.user_id, c.text, c.created_at, u.username, u.avatar
             FROM comments c
             JOIN users u ON c.user_id = u.id
             WHERE c.post_id IN (${placeholders})
             ORDER BY c.post_id, c.created_at DESC
-        `).all(...postIds);
+        `).all(...validIds);
 
         // Group comments by post_id
         const commentsByPost = {};
@@ -101,7 +108,7 @@ router.post('/', validateComment, (req, res) => {
     }
 });
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', validateId, (req, res) => {
     try {
         const comment = db.prepare('SELECT user_id FROM comments WHERE id = ?').get(req.params.id);
         if (!comment) return res.status(404).json({ error: 'Comment not found' });

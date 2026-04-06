@@ -92,12 +92,18 @@ router.post('/post/:postId', (req, res) => {
 // Remove tag from post
 router.delete('/post/:postId/:tagId', (req, res) => {
     try {
-        const post = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(req.params.postId);
+        const postId = parseInt(req.params.postId);
+        const tagId = parseInt(req.params.tagId);
+        if (isNaN(postId) || isNaN(tagId)) {
+            return res.status(400).json({ error: 'Invalid post or tag ID' });
+        }
+        
+        const post = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(postId);
         if (!post) return res.status(404).json({ error: 'Post not found' });
         if (post.user_id !== req.userId) return res.status(403).json({ error: 'Not your post' });
 
         db.prepare('DELETE FROM post_tags WHERE post_id = ? AND tag_id = ?')
-            .run(req.params.postId, req.params.tagId);
+            .run(postId, tagId);
 
         res.json({ success: true });
     } catch (error) {
@@ -111,7 +117,10 @@ router.delete('/post/:postId/:tagId', (req, res) => {
 // Toggle subscription to user
 router.post('/subscribe/user/:userId', (req, res) => {
     try {
-        const targetUserId = req.params.userId;
+        const targetUserId = parseInt(req.params.userId);
+        if (isNaN(targetUserId)) {
+            return res.status(400).json({ error: 'Invalid user ID' });
+        }
         if (targetUserId === req.userId) {
             return res.status(400).json({ error: 'Cannot subscribe to yourself' });
         }
@@ -141,7 +150,12 @@ router.post('/subscribe/user/:userId', (req, res) => {
 // Toggle subscription to tag
 router.post('/subscribe/tag/:tagId', (req, res) => {
     try {
-        const tag = db.prepare('SELECT id FROM tags WHERE id = ?').get(req.params.tagId);
+        const tagId = parseInt(req.params.tagId);
+        if (isNaN(tagId)) {
+            return res.status(400).json({ error: 'Invalid tag ID' });
+        }
+        
+        const tag = db.prepare('SELECT id FROM tags WHERE id = ?').get(tagId);
         if (!tag) return res.status(404).json({ error: 'Tag not found' });
 
         const existing = db.prepare(

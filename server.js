@@ -24,6 +24,21 @@ import { validateSession } from './middleware/auth.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Security: Validate critical environment variables
+const requiredEnvVars = {
+    JWT_SECRET: 'Generate with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"',
+    SESSION_SECRET: 'Generate with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"'
+};
+
+for (const [key, hint] of Object.entries(requiredEnvVars)) {
+    const value = process.env[key];
+    if (!value || value.length < 32) {
+        console.error(`\n❌ CRITICAL: ${key} is not set or too short (min 32 chars)`);
+        console.error(`   ${hint}\n`);
+        process.exit(1);
+    }
+}
+
 const app = express();
 const PORT = process.env.PORT || 8000;
 
@@ -84,21 +99,33 @@ app.use(mongoSanitize());
 app.use(preventXSS);
 app.use(securityHeaders);
 
-// Rate limiting
-const limiter = rateLimit({
+// Rate limiting — stricter for security
+const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 500,
-    message: { error: 'Too many requests' },
+    max: 200, // Reduced from 500
+    message: { error: 'Too many requests, please slow down' },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
-app.use('/api/', limiter);
+app.use('/api/', apiLimiter);
 
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 30,
+    max: 20, // Reduced from 30
     skipSuccessfulRequests: true,
     message: { error: 'Too many login attempts' }
 });
 app.use('/api/auth/', authLimiter);
+
+// Stricter limits for write operations
+const writeLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 50, // Max 50 posts/comments/likes per 15 min
+    message: { error: 'Too many write operations' }
+});
+app.use('/api/posts', writeLimiter);
+app.use('/api/comments', writeLimiter);
+app.use('/api/likes', writeLimiter);
 
 // Static files
 app.use('/static', express.static(path.join(__dirname, 'public'), {
@@ -157,13 +184,16 @@ app.use((req, res) => {
     res.status(404).json({ error: 'Not found' });
 });
 
-// Error handler
+// Error handler — never expose internals to client
 app.use((err, req, res, next) => {
-    console.error('Error:', err);
-    const errorMessage = process.env.NODE_ENV === 'production' 
-        ? 'Internal server error' 
-        : err.message;
-    res.status(err.status || 500).json({ error: errorMessage });
+    // Log full error server-side
+    console.error('Server Error:', err.message);
+    if (err.stack && process.env.NODE_ENV !== 'production') {
+        console.error(err.stack);
+    }
+    
+    // Never expose err.message to client
+    res.status(err.status || 500).json({ error: 'Internal server error' });
 });
 
 const server = app.listen(PORT, () => {
