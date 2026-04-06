@@ -1,0 +1,15 @@
+{
+    "keep": {
+        "days": true,
+        "amount": 90
+    },
+    "auditLog": "/opt/cosmogram/data/.2dce745bcf3df237ede9e23952bc1e1bd85031f7-audit.json",
+    "files": [
+        {
+            "date": 1775479008086,
+            "name": "/opt/cosmogram/data/security-2026-04-06.log",
+            "hash": "bca124ca02b0e192d6326a0e45565f0e63b2d10490cb903fbf57e5a102d72831"
+        }
+    ],
+    "hashType": "sha256"
+}

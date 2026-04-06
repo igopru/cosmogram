@@ -1,17 +1,16 @@
 import xss from 'xss';
 import escapeHtml from 'escape-html';
+import logger from './logger.js';
 
 // Security event logger
 export function logSecurityEvent(req, action, details = {}) {
-    const logEntry = {
-        timestamp: new Date().toISOString(),
+    logger.warn(`Security: ${action}`, {
+        action,
         ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
         user: req.user?.id || 'anonymous',
-        action,
-        details: JSON.stringify(details).slice(0, 500), // Limit to prevent log injection
+        details: JSON.stringify(details).slice(0, 500),
         ua: req.get('user-agent') || 'unknown'
-    };
-    console.warn(`[SECURITY] ${action}:`, JSON.stringify(logEntry));
+    });
 }
 
 export function preventXSS(req, res, next) {

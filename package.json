@@ -31,6 +31,8 @@
     "multer": "^2.0.0",
     "sharp": "^0.33.5",
     "uuid": "^11.1.0",
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0",
     "xss": "^1.0.15"
   },
   "devDependencies": {

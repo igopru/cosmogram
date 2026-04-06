@@ -20,32 +20,33 @@ sharp.cache({ memory: 100, files: 0 }); // Limit cache to 100MB, disable file ca
 const router = express.Router();
 const db = getDB();
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const isVideo = file.mimetype.startsWith('video/');
-        const uploadDir = path.join(__dirname, '../uploads', isVideo ? 'videos' : 'images');
-        cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        cb(null, `${uuidv4()}${ext}`);
+// Create upload directories
+const uploadDirs = ['uploads/images', 'uploads/thumbnails', 'uploads/videos'];
+uploadDirs.forEach(dir => {
+    const fullPath = path.join(__dirname, '..', dir);
+    if (!fs.existsSync(fullPath)) {
+        fs.mkdirSync(fullPath, { recursive: true });
     }
 });
 
+// Use memory storage — files buffered in memory for magic byte validation BEFORE disk write
+const memoryStorage = multer.memoryStorage();
+
 const upload = multer({
-    storage,
+    storage: memoryStorage,
     limits: {
         fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10485760,
         files: 10  // Max 10 files per post
     },
     fileFilter: (req, file, cb) => {
-        // Basic MIME type check (header-based, verified later by magic bytes)
+        // Basic MIME type check from header (verified later by magic bytes)
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
         if (!allowedTypes.includes(file.mimetype)) {
+            logSecurityEvent(req, 'upload_rejected_mime', { filename: file.originalname, type: file.mimetype });
             return cb(new Error('Invalid file type'), false);
         }
-        
-        // Verify extension matches MIME type
+
+        // Verify extension matches claimed MIME type
         const ext = path.extname(file.originalname).toLowerCase();
         const validExtensions = {
             'image/jpeg': ['.jpg', '.jpeg'],
@@ -55,14 +56,66 @@ const upload = multer({
             'video/mp4': ['.mp4'],
             'video/webm': ['.webm']
         };
-        
+
         if (!validExtensions[file.mimetype]?.includes(ext)) {
+            logSecurityEvent(req, 'upload_rejected_ext_mismatch', {
+                filename: file.originalname,
+                mime: file.mimetype,
+                ext
+            });
             return cb(new Error('File extension does not match MIME type'), false);
         }
-        
+
         cb(null, true);
     }
 });
+
+// Magic byte validation + save to disk
+// This function runs AFTER multer buffers the file but BEFORE it's written to disk
+async function validateAndSaveFile(buffer, originalName, claimedMime) {
+    const fileType = await fileTypeFromBuffer(buffer);
+
+    if (!fileType) {
+        throw { status: 400, message: 'Unable to determine file type — file may be corrupted or malicious' };
+    }
+
+    // Whitelist of allowed MIME types (by magic bytes, not headers)
+    const allowedMimes = {
+        'image/jpeg': { ext: '.jpg', dir: 'images' },
+        'image/png': { ext: '.png', dir: 'images' },
+        'image/webp': { ext: '.webp', dir: 'images' },
+        'image/gif': { ext: '.gif', dir: 'images' },
+        'video/mp4': { ext: '.mp4', dir: 'videos' },
+        'video/webm': { ext: '.webm', dir: 'videos' }
+    };
+
+    const config = allowedMimes[fileType.mime];
+    if (!config) {
+        throw { status: 400, message: `File type '${fileType.mime}' is not allowed (claimed: ${claimedMime})` };
+    }
+
+    // Verify magic byte category matches claimed category (prevent伪装 attacks)
+    const claimedCategory = claimedMime.split('/')[0];
+    const detectedCategory = fileType.mime.split('/')[0];
+    if (claimedCategory !== detectedCategory) {
+        throw { status: 400, message: `File content '${fileType.mime}' does not match claimed '${claimedMime}'` };
+    }
+
+    // Generate UUID filename with CORRECT extension (from magic bytes, not user input)
+    const uuid = uuidv4();
+    const filename = `${uuid}${config.ext}`;
+    const uploadDir = path.join(__dirname, '..', 'uploads', config.dir);
+    const filePath = path.join(uploadDir, filename);
+
+    // Write to disk
+    await fs.promises.writeFile(filePath, buffer);
+
+    return {
+        path: filePath,
+        mediaType: config.dir === 'videos' ? 'video' : 'image',
+        filename: filename
+    };
+}
 
 router.get('/feed', (req, res) => {
     try {
@@ -220,19 +273,21 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
 
         const postId = result.lastInsertRowid;
 
-        // Process files with concurrency limit to prevent event loop blocking
+        // Validate magic bytes + save files to disk + generate thumbnails
         const CONCURRENCY_LIMIT = 3;
         const processedMedia = [];
 
         for (let i = 0; i < req.files.length; i += CONCURRENCY_LIMIT) {
             const batch = req.files.slice(i, i + CONCURRENCY_LIMIT);
             const promises = batch.map(async (file) => {
-                const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+                // Validate magic bytes BEFORE writing to disk
+                const savedFile = await validateAndSaveFile(file.buffer, file.originalname, file.mimetype);
+
                 let thumbnailPath = null;
 
-                if (mediaType === 'image') {
-                    const thumbFilename = `thumb_${path.basename(file.filename)}`;
-                    thumbnailPath = path.join(__dirname, '../uploads/thumbnails', thumbFilename);
+                if (savedFile.mediaType === 'image') {
+                    const thumbFilename = `thumb_${savedFile.filename}`;
+                    thumbnailPath = path.join(__dirname, '..', 'uploads', 'thumbnails', thumbFilename);
                     try {
                         // Add timeout to sharp operations (30 seconds)
                         const timeoutPromise = new Promise((_, reject) => {
@@ -240,7 +295,7 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
                         });
 
                         await Promise.race([
-                            sharp(file.path)
+                            sharp(file.buffer)  // Use buffer directly (already in memory)
                                 .resize(600, 600, { fit: 'inside' })
                                 .jpeg({ quality: 80 })
                                 .toFile(thumbnailPath),
@@ -252,14 +307,14 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
                     }
                 }
 
-                return { file, mediaType, thumbnailPath };
+                return { file: savedFile, mediaType: savedFile.mediaType, thumbnailPath };
             });
 
             const results = await Promise.all(promises);
             processedMedia.push(...results);
         }
 
-        // Insert all media records (using the insertMedia prepared statement from above)
+        // Insert all media records
         for (let i = 0; i < processedMedia.length; i++) {
             const { file, mediaType, thumbnailPath } = processedMedia[i];
             insertMedia.run(postId, mediaType, file.path, thumbnailPath, i);
@@ -284,7 +339,6 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
                             insertPostTag.run(postId, tag.id);
                         }
                     }
-                    console.log(`✅ Tags added to post ${postId}:`, tags);
                 }
             } catch (e) {
                 console.error('Tag parsing error:', e.message, 'raw:', req.body.tags);
@@ -293,6 +347,10 @@ router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
 
         res.status(201).json({ success: true, postId, mediaCount: req.files.length });
     } catch (error) {
+        // If validation failed, return the specific error
+        if (error.status) {
+            return res.status(error.status).json({ error: error.message });
+        }
         console.error('Post creation error:', error);
         res.status(500).json({ error: 'Failed to create post' });
     }

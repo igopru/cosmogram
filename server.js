@@ -11,6 +11,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import os from 'os';
+import logger from './middleware/logger.js';
 
 import { initDatabase, getDB } from './models/database.js';
 import authRoutes from './routes/auth.js';
@@ -87,7 +88,7 @@ app.use((req, res, next) => {
     res.on('finish', () => {
         const duration = Date.now() - start;
         if (duration > 1000) { // Log requests taking more than 1 second
-            console.log(`[SLOW] ${req.method} ${req.url} - ${duration}ms`);
+            logger.warn('Slow request', { method: req.method, url: req.url, duration: `${duration}ms`, ip: req.ip });
         }
     });
     next();
@@ -187,32 +188,33 @@ app.use((req, res) => {
 // Error handler — never expose internals to client
 app.use((err, req, res, next) => {
     // Log full error server-side
-    console.error('Server Error:', err.message);
-    if (err.stack && process.env.NODE_ENV !== 'production') {
-        console.error(err.stack);
-    }
+    logger.error('Server Error', { message: err.message, stack: err.stack, url: req.url, method: req.method });
     
     // Never expose err.message to client
     res.status(err.status || 500).json({ error: 'Internal server error' });
 });
 
 const server = app.listen(PORT, () => {
-    console.log(`\n🚀 Server running on http://localhost:${PORT}`);
-    console.log(`🔒 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`📁 Uploads: ${path.join(__dirname, 'uploads')}`);
-    console.log(`💾 Database: ${path.join(__dirname, 'data/media.db')}\n`);
+    logger.info(`🚀 Server running on http://localhost:${PORT}`, {
+        environment: process.env.NODE_ENV || 'development',
+        uploads: path.join(__dirname, 'uploads'),
+        database: path.join(__dirname, 'data/media.db')
+    });
 });
 
 // System health monitoring
 function logSystemHealth() {
     const memUsage = process.memoryUsage();
-    const cpuUsage = process.cpuUsage();
     const loadAvg = os.loadavg();
     const freeMem = os.freemem();
     const totalMem = os.totalmem();
     const memPercent = ((freeMem / totalMem) * 100).toFixed(1);
     
-    console.log(`[HEALTH] Memory: ${(memUsage.rss / 1024 / 1024).toFixed(1)}MB RSS | System: ${memPercent}% free | Load: ${loadAvg.join(', ')}`);
+    logger.info('System health', {
+        rss_mb: (memUsage.rss / 1024 / 1024).toFixed(1),
+        system_free_percent: memPercent,
+        load_avg: loadAvg.join(', ')
+    });
 }
 
 // Log health every 5 minutes
@@ -223,16 +225,11 @@ logSystemHealth(); // Initial log
 function optimizeDatabase() {
     try {
         const db = getDB();
-        
-        // Checkpoint WAL
         db.pragma('wal_checkpoint(TRUNCATE)');
-        
-        // Optimize database
         db.pragma('optimize');
-        
-        console.log('[DB] Periodic optimization completed');
+        logger.info('Database optimization completed');
     } catch (error) {
-        console.error('[DB] Optimization error:', error.message);
+        logger.error('Database optimization error', { message: error.message });
     }
 }
 
