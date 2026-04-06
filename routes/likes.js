@@ -39,8 +39,9 @@ router.get('/post/:postId', (req, res) => {
             JOIN users u ON l.user_id = u.id
             WHERE l.post_id = ?
             ORDER BY l.created_at DESC
+            LIMIT 100
         `).all(req.params.postId);
-        
+
         res.json({ likes });
     } catch (error) {
         console.error('Get likes error:', error);

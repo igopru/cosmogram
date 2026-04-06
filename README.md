@@ -171,15 +171,35 @@ systemctl stop cosmogram        # Остановка
 ### 📸 Медиа посты
 - Загрузка фото/видео через UI
 - Несколько медиа в одном посте (карусель)
+- **Карусель:** фиксированная высота, плавные переходы, стабильная работа с mixed orientation
+- **Двойной тап/клик:** просмотр изображения/видео на весь экран
 - Свайп фото на мобильных (touch)
 - Drag мышкой на десктопе
 - Точки-индикаторы + счётчик `1/5`
 - Описание к постам (до 2200 символов)
 
+### 🖼️ Загрузка файлов
+- Превью до 10 файлов с компактной сеткой (70px ячейки)
+- Контейнер превью с прокруткой (max 280px) — кнопка Publish всегда видна
+- Drag & drop поддержка
+- Сжатие изображений перед загрузкой
+
 ### ❤️ Лайки
 - Like/unlike с анимацией
 - Счётчик лайков в реальном времени
 - Защита от повторных лайков
+
+### 🏷️ Теги
+- Добавление тегов при создании поста (автодополнение)
+- Отображение тегов под каждым постом (`#tagname`)
+- Облако тегов вверху ленты
+- Подписка на теги (колокольчик ○/🔔)
+- Фильтрация ленты по тегам
+
+### 👥 Подписки
+- Подписка на авторов (+ Follow / ✓ Subscribed)
+- Фильтр ленты "Subscriptions" — только посты от подписанных
+- Подписка на теги — посты с нужными тегами
 
 ### 💬 Комментарии
 - Добавление комментариев
@@ -188,8 +208,14 @@ systemctl stop cosmogram        # Остановка
 
 ### 🗑️ Управление постами
 - Удаление своих постов
-- Автоматическое удаление файлов
+- Автоматическое удаление файлов (включая симлинки)
 - Каскадное удаление комментариев/лайков
+
+### 🔐 Сброс пароля
+- Кнопка "Forgot password?" на странице входа
+- Отправка ссылки на email (если SMTP настроен)
+- Токен с 1-часовым сроком действия
+- Форма установки нового пароля
 
 ### 🌓 Темы
 - Светлая и тёмная тема
@@ -281,6 +307,7 @@ const CONFIG = {
     sourceDir: '/path/to/your/media/archive',    // Папка с архивом
     username: 'admin',                  // От чьего имени
     groupByMinutes: 1440,               // Группировка по дням
+    batchSize: 20,                      // Макс. файлов в посте
     dateFrom: '',                       // Фильтр с даты
     dateTo: '',                         // Фильтр по дату
     maxFiles: 0,                        // Лимит (0 = без лимита)
@@ -291,33 +318,40 @@ const CONFIG = {
 
 ### Группировка
 
+**Ключевое правило:** файлы из РАЗНЫХ папок НИКОГДА не объединяются в один пост.
+
 | Значение | Поведение |
 |----------|-----------|
 | `0` | Каждый файл = отдельный пост |
-| `30` | Файлы в пределах 30 мин = один пост |
-| `1440` | Файлы одного дня = один пост ✅ |
+| `30` | Файлы в пределах 30 мин внутри папки = один пост |
+| `1440` | Файлы одного дня внутри папки = один пост ✅ |
 
 ### Запуск
 
 ```bash
-# 1. Тест (dry run)
-# Установи dryRun: true в CONFIG
-node scripts/import-media.js
+# 1. Сканирование (читает EXIF, сохраняет очередь с путями папок)
+node scripts/import-media.js scan
 
-# 2. Реальный импорт
-# Установи dryRun: false, maxFiles: 100 (для начала)
-node scripts/import-media.js
+# 2. Проверка статуса
+node scripts/import-media.js status
+
+# 3. Импорт (создаёт посты, группируя по папкам + времени)
+node scripts/import-media.js import
+
+# Сброс всего (посты + медиа + файлы)
+node scripts/import-media.js reset
 ```
 
 ### Что происходит
 
 1. Сканирует папку рекурсивно
 2. Читает EXIF даты (JPEG) или дату файла
-3. Фильтрует по `dateFrom`/`dateTo`
-4. Сортирует по дате
-5. Группирует по `groupByMinutes`
-6. Для каждой группы:
-   - Создаёт пост с датой
+3. **Запоминает папку** для каждого файла
+4. Фильтрует по `dateFrom`/`dateTo`
+5. Сортирует по дате
+6. **Группирует: сначала по папкам, затем по времени внутри папки**
+7. Для каждой группы:
+   - Создаёт пост с датой и именем папки
    - Копирует файлы в `uploads/`
    - Генерирует миниатюры
    - Сохраняет в БД
@@ -339,6 +373,8 @@ node scripts/import-media.js
 | POST | `/api/auth/login` | ❌ | Вход |
 | POST | `/api/auth/logout` | ✅ | Выход |
 | GET | `/api/auth/me` | ✅ | Текущий пользователь |
+| POST | `/api/auth/forgot-password` | ❌ | Запрос сброса пароля |
+| POST | `/api/auth/reset-password` | ❌ | Установка нового пароля |
 
 ### Posts
 
@@ -363,6 +399,18 @@ node scripts/import-media.js
 | POST | `/api/likes/toggle/:postId` | ✅ | Like/unlike |
 | GET | `/api/likes/post/:postId` | ✅ | Список лайков |
 
+### Tags & Subscriptions
+
+| Method | Endpoint | Auth | Описание |
+|--------|----------|------|----------|
+| GET | `/api/tags` | ✅ | Все теги с подпиской |
+| POST | `/api/tags` | ✅ | Создать тег |
+| POST | `/api/tags/post/:postId` | ✅ | Добавить теги к посту |
+| DELETE | `/api/tags/post/:postId/:tagId` | ✅ | Удалить тег с поста |
+| POST | `/api/tags/subscribe/user/:userId` | ✅ | Подписка на пользователя |
+| POST | `/api/tags/subscribe/tag/:tagId` | ✅ | Подписка на тег |
+| GET | `/api/tags/subscriptions` | ✅ | Мои подписки |
+
 ---
 
 ## Структура проекта
@@ -373,6 +421,7 @@ node scripts/import-media.js
 ├── package.json                 # Зависимости
 ├── .env                         # Переменные окружения
 ├── cosmogram.service            # Systemd сервис
+├── CHANGELOG.md                 # История изменений
 │
 ├── models/
 │   └── database.js              # Инициализация БД
@@ -384,11 +433,15 @@ node scripts/import-media.js
 │   ├── auth.js                  # Auth endpoints
 │   ├── posts.js                 # Posts endpoints
 │   ├── comments.js              # Comments endpoints
-│   └── likes.js                 # Likes endpoints
+│   ├── likes.js                 # Likes endpoints
+│   └── tags.js                  # Tags + subscriptions endpoints
 ├── scripts/
 │   ├── import-media.js          # Массовый импорт файлов
 │   ├── manage-users.js          # Управление пользователями
-│   └── migrate-posts-table.js   # Миграция БД
+│   ├── migrate-posts-table.js   # Миграция БД
+│   ├── reset-database.js        # Сброс постов и медиа
+│   ├── system-monitor.sh        # Автоматический мониторинг (cron каждые 5 мин)
+│   └── diagnose.sh              # Ручная диагностика при проблемах
 ├── public/
 │   ├── index.html               # Фронтенд
 │   ├── style.css                # Стили (+ тёмная тема)
@@ -455,6 +508,19 @@ rm /path/to/cosmogram/data/media.db*
 systemctl start cosmogram
 ```
 
+### Сброс пароля пользователя
+
+Если SMTP не настроен, можно сбросить пароль через CLI:
+```bash
+node scripts/manage-users.js resetpw --username <username> --password "NewPass123!"
+```
+
+Или через интерфейс:
+1. Нажми "Forgot password?" на странице входа
+2. Введи email пользователя
+3. Если SMTP не настроен — ссылка появится прямо в браузере
+4. Перейди по ссылке и установи новый пароль
+
 ### Логи
 
 ```bash
@@ -464,8 +530,59 @@ journalctl -u cosmogram -f
 # nginx
 journalctl -u nginx -f
 
+# Мониторинг системы
+tail -f /opt/cosmogram/data/system-monitor.log
+
+# Диагностика при зависаниях
+/opt/cosmogram/scripts/diagnose.sh
+
 # В браузере — DevTools Console (F12)
 ```
+
+---
+
+## 🛠️ Мониторинг и диагностика
+
+### Автоматический мониторинг
+
+Скрипт мониторинга запускается каждые 5 минут через cron и записывает данные в `/opt/cosmogram/data/system-monitor.log`:
+
+```bash
+# Просмотр последних записей
+tail -50 /opt/cosmogram/data/system-monitor.log
+```
+
+**Отслеживаемые метрики:**
+- Загрузка CPU и памяти
+- IOWAIT (ожидание диска)
+- Размер SQLite WAL файла
+- Активные подключения
+- Топ процессов по CPU
+
+### Ручная диагностика
+
+При зависании или проблемах с производительностью:
+
+```bash
+/opt/cosmogram/scripts/diagnose.sh
+```
+
+Создаёт детальный снимок состояния системы в `/opt/cosmogram/data/diag-YYYYMMDD-HHMMSS.log`
+
+### Автоматические алерты
+
+Система предупреждает при:
+- IOWAIT > 10%
+- Load average > 5
+- Memory утечке Cosmogram > 500MB
+- SQLite WAL файле > 100MB
+
+### Оптимизация базы данных
+
+Cosmogram автоматически оптимизирует SQLite:
+- WAL checkpoint каждые 30 минут
+- Memory-mapped I/O (256MB)
+- Агрессивный autocheckpoint (100 страниц)
 
 ---
 

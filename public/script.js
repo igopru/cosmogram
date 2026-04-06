@@ -1,6 +1,86 @@
 let currentUser = null;
 let currentFeed = [];
-let selectedMedia = null;
+let allTags = [];
+let currentFilter = 'all';
+let uploadTags = [];
+
+// Video management - pause videos when not visible
+let videoObserver = null;
+let activeVideos = new Map(); // Track all videos and their visibility
+
+function initVideoManagement() {
+    // IntersectionObserver to pause videos when they leave viewport
+    videoObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            const video = entry.target;
+            if (entry.isIntersecting && entry.intersectionRatio > 0.5) {
+                // Video is visible - can play
+                video.muted = false;
+                video.dataset.visible = 'true';
+            } else {
+                // Video is not visible - pause and mute
+                video.pause();
+                video.muted = true;
+                video.dataset.visible = 'false';
+            }
+        });
+    }, {
+        threshold: [0, 0.5]
+    });
+}
+
+// Register a video element for management
+function registerVideo(video) {
+    if (!videoObserver) initVideoManagement();
+    
+    video.muted = true; // Start muted
+    video.dataset.visible = 'true';
+    activeVideos.set(video, true);
+    videoObserver.observe(video);
+    
+    // Also mute on play if not in viewport
+    video.addEventListener('play', () => {
+        const rect = video.getBoundingClientRect();
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+        const isVisible = rect.top >= 0 && rect.bottom <= viewportHeight;
+        
+        if (!isVisible) {
+            video.pause();
+        }
+    });
+}
+
+// Pause all videos except the specified one
+function pauseAllVideosExcept(exceptVideo = null) {
+    activeVideos.forEach((_, video) => {
+        if (video !== exceptVideo) {
+            video.pause();
+            video.muted = true;
+        }
+    });
+}
+
+// Pause all videos in a specific carousel
+function pauseCarouselVideos(carouselId) {
+    const carousel = document.getElementById(`carousel-${carouselId}`);
+    if (!carousel) return;
+    
+    const videos = carousel.querySelectorAll('video');
+    videos.forEach(video => {
+        video.pause();
+        video.muted = true;
+    });
+}
+
+// Play visible video in carousel (unmuted)
+function playCarouselVideo(video) {
+    pauseAllVideosExcept(video);
+    video.muted = false;
+    video.play().catch(e => {
+        // Autoplay blocked - keep muted
+        video.muted = true;
+    });
+}
 
 // Обёртка для fetch с credentials
 const apiFetch = async (url, options = {}) => {
@@ -50,10 +130,13 @@ function showFeed() {
 // Load feed
 async function loadFeed() {
     const feed = document.getElementById('feed');
+    const filters = document.getElementById('feedFilters');
+    if (filters) filters.style.display = 'flex';
+    
     feed.innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>Loading...</p></div>';
 
     try {
-        const res = await apiFetch('/api/posts/feed');
+        const res = await apiFetch(`/api/posts/feed?filter=${encodeURIComponent(currentFilter)}`);
         if (!res.ok) throw new Error('Failed to load feed');
         const data = await res.json();
         currentFeed = data.posts;
@@ -88,11 +171,15 @@ function renderFeed() {
         const postEl = createPostElement(post);
         feed.appendChild(postEl);
     });
+    
+    // Setup scroll-based video management after render
+    setupScrollVideoManagement();
 }
 
 function createPostElement(post) {
     const div = document.createElement('div');
     div.className = 'post';
+    div.dataset.postId = post.id; // Add post ID for video management
 
     const mediaCount = post.media ? post.media.length : 0;
     const isOwner = Number(post.user_id) === Number(currentUser?.id);
@@ -104,10 +191,11 @@ function createPostElement(post) {
         mediaContainer = `
             <div class="post-media-carousel" id="carousel-${post.id}">
                 ${post.media.map((m, i) => `
-                    <div class="carousel-slide" data-index="${i}" style="${i > 0 ? 'display:none;' : ''}">
+                    <div class="carousel-slide ${i === 0 ? 'active' : ''}" data-index="${i}">
                         ${m.media_type === 'video'
-                            ? `<video src="${m.media_url}" controls preload="metadata"></video>`
+                            ? `<video src="${m.media_url}" controls preload="metadata" loop playsinline></video>`
                             : `<img src="${m.media_url}" alt="Post" loading="lazy">`}
+                        <button class="fullscreen-enter-btn" onclick="openFullscreen(this.closest('.carousel-slide').querySelector('img, video'))" title="Fullscreen">⛶</button>
                     </div>
                 `).join('')}
                 ${mediaCount > 1 ? `
@@ -121,13 +209,14 @@ function createPostElement(post) {
             </div>
         `;
     } else if (mediaCount === 1) {
-        // Одиночное медиа
+        // Одиночное медиа с fullscreen
         const m = post.media[0];
         mediaContainer = `
-            <div class="post-media">
+            <div class="post-media-single" data-post-id="${post.id}">
                 ${m.media_type === 'video'
-                    ? `<video src="${m.media_url}" controls preload="metadata"></video>`
+                    ? `<video src="${m.media_url}" controls preload="metadata" loop playsinline></video>`
                     : `<img src="${m.media_url}" alt="Post" loading="lazy">`}
+                <button class="fullscreen-btn-inline" onclick="openInlineFullscreen(this.closest('.post-media-single').querySelector('img, video'))" title="Fullscreen">⛶</button>
             </div>
         `;
     } else {
@@ -138,13 +227,22 @@ function createPostElement(post) {
         <div class="post-header">
             <div class="post-avatar">${getAvatarEmoji(post.username)}</div>
             <div class="post-header-info">
-                <div class="post-username">${escapeHtml(post.username)}</div>
+                <div class="post-header-row">
+                    <div class="post-username">${escapeHtml(post.username)}</div>
+                    ${!isOwner ? `<button class="subscribe-btn ${post.is_subscribed ? 'subscribed' : ''}" onclick="toggleSubscribeUser(${post.user_id}, this)">${post.is_subscribed ? '✓ Subscribed' : '+ Follow'}</button>` : ''}
+                </div>
                 <div class="post-time">${formatDate(post.created_at)}</div>
             </div>
             ${isOwner ? `<button class="post-menu" onclick="deletePost(${post.id}, this)">🗑️</button>` : ''}
         </div>
 
         ${mediaContainer}
+
+        ${post.tags && post.tags.length > 0 ? `
+        <div class="post-tags">
+            ${post.tags.map(t => `<span class="post-tag" onclick="filterByTag('${escapeHtml(t.name)}')">#${escapeHtml(t.name)}</span>`).join('')}
+        </div>
+        ` : ''}
 
         <div class="post-actions">
             <button class="action-btn like-btn ${post.user_liked ? 'liked' : ''}" onclick="toggleLike(${post.id}, this)">${post.user_liked ? '❤️' : '🤍'}</button>
@@ -160,7 +258,15 @@ function createPostElement(post) {
         </div>
         ` : ''}
 
-        <div class="post-comments" id="comments-${post.id}"></div>
+        <div class="post-comments" id="comments-${post.id}">
+            ${(post.comments && post.comments.length > 0) ? post.comments.map(c => `
+                <div class="comment">
+                    <strong>${escapeHtml(c.username)}</strong>
+                    <span>${escapeHtml(c.text)}</span>
+                    <span class="comment-time">${formatDate(c.created_at)}</span>
+                </div>
+            `).join('') : ''}
+        </div>
 
         <div class="comment-form">
             <input type="text" id="comment-input-${post.id}" class="comment-input" placeholder="Add a comment..." maxlength="500">
@@ -168,7 +274,6 @@ function createPostElement(post) {
         </div>
     `;
 
-    loadComments(post.id);
     if (mediaCount > 1) carouselInit(post.id);
     return div;
 }
@@ -178,110 +283,435 @@ const carouselState = {};
 
 function carouselInit(postId) {
     if (!carouselState[postId]) {
-        carouselState[postId] = { currentIndex: 0, touchStartX: 0, touchStartY: 0 };
+        carouselState[postId] = { currentIndex: 0 };
     }
+    
     const carousel = document.getElementById(`carousel-${postId}`);
     if (!carousel) return;
 
-    // Touch/swipe events for mobile
-    carousel.addEventListener('touchstart', (e) => {
-        carouselState[postId].touchStartX = e.touches[0].clientX;
-        carouselState[postId].touchStartY = e.touches[0].clientY;
+    // Register videos
+    carousel.querySelectorAll('video').forEach(video => registerVideo(video));
+
+    // Disable native drag on images
+    carousel.querySelectorAll('img').forEach(img => {
+        img.draggable = false;
+        img.addEventListener('dragstart', e => e.preventDefault());
+    });
+
+    // Setup double-tap on each slide (more reliable than on individual elements)
+    carousel.querySelectorAll('.carousel-slide').forEach(slide => {
+        setupDoubleTapOnSlide(slide, carousel.id);
+    });
+}
+
+// Double-tap tracking per slide (key: carouselId-slideIndex)
+const slideTapCounters = new Map();
+let fullscreenOverlay = null;
+
+function setupDoubleTapOnSlide(slide, carouselId) {
+    const key = `${carouselId}-${slide.dataset.index}`;
+    slideTapCounters.set(key, { count: 0, timer: null });
+
+    slide.addEventListener('touchend', (e) => {
+        // Ignore if tapping the fullscreen button
+        if (e.target.classList.contains('fullscreen-enter-btn')) return;
+        
+        const media = slide.querySelector('img, video');
+        if (!media) return;
+
+        const data = slideTapCounters.get(key);
+        data.count++;
+        
+        if (data.count === 1) {
+            data.timer = setTimeout(() => {
+                data.count = 0;
+            }, 350);
+        } else if (data.count === 2) {
+            clearTimeout(data.timer);
+            data.count = 0;
+            toggleFullscreen(media);
+        }
     }, { passive: true });
 
-    carousel.addEventListener('touchend', (e) => {
-        const state = carouselState[postId];
-        if (!state) return;
-        const diffX = e.changedTouches[0].clientX - state.touchStartX;
-        const diffY = e.changedTouches[0].clientY - state.touchStartY;
-
-        // Только горизонтальный свайп (проверяем что |diffX| > |diffY|)
-        if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 50) {
+    // Desktop double-click
+    slide.addEventListener('dblclick', (e) => {
+        if (e.target.classList.contains('fullscreen-enter-btn')) return;
+        const media = slide.querySelector('img, video');
+        if (media) {
             e.preventDefault();
-            if (diffX > 0) carouselPrev(postId);
-            else carouselNext(postId);
+            toggleFullscreen(media);
         }
-    }, { passive: false });
+    });
+}
 
-    // Mouse swipe для десктопа (drag)
-    let isDragging = false;
-    let dragStartX = 0;
-    carousel.addEventListener('mousedown', (e) => {
-        if (e.target.tagName === 'VIDEO') return; // Не блокируем взаимодействие с видео
-        isDragging = true;
-        dragStartX = e.clientX;
-        carousel.style.cursor = 'grabbing';
+function toggleFullscreen(mediaElement) {
+    if (!mediaElement) return;
+    
+    // Handle single media (not in carousel)
+    const singleContainer = mediaElement.closest('.post-media-single');
+    const isSingleMedia = !!singleContainer;
+    
+    // Handle carousel slide
+    const slide = mediaElement.closest('.carousel-slide');
+    const carousel = mediaElement.closest('.post-media-carousel');
+    const allSlides = carousel ? Array.from(carousel.querySelectorAll('.carousel-slide')) : [];
+    const currentSlideIndex = slide ? allSlides.indexOf(slide) : -1;
+    const hasMultipleSlides = allSlides.length > 1;
+
+    // For single media, use the media itself as the "slide"
+    const allMediaItems = isSingleMedia ? [mediaElement] : allSlides;
+
+    if (fullscreenOverlay) {
+        const video = fullscreenOverlay.querySelector('video');
+        if (video) video.pause();
+        fullscreenOverlay.remove();
+        fullscreenOverlay = null;
+        document.removeEventListener('keydown', handleKey);
+        document.removeEventListener('wheel', handleWheel, { capture: true });
+        return;
+    }
+
+    let currentFullscreenIndex = isSingleMedia ? 0 : (currentSlideIndex >= 0 ? currentSlideIndex : 0);
+
+    // Create overlay
+    fullscreenOverlay = document.createElement('div');
+    fullscreenOverlay.className = 'carousel-fullscreen-overlay';
+    fullscreenOverlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.95);
+        z-index: 10000;
+        -webkit-tap-highlight-color: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+    `;
+
+    // Container for single slide (replaced on swipe)
+    const mediaContainer = document.createElement('div');
+    mediaContainer.style.cssText = `
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        transition: opacity 0.2s ease;
+    `;
+
+    // Show media function
+    const showSlide = (index) => {
+        mediaContainer.style.opacity = '0';
+        
+        setTimeout(() => {
+            mediaContainer.innerHTML = '';
+            
+            let origMedia;
+            
+            if (isSingleMedia) {
+                // Single media — clone from the original element
+                origMedia = mediaElement;
+            } else {
+                // Carousel — get from slide
+                const s = allSlides[index];
+                if (!s) return;
+                origMedia = s.querySelector('img, video');
+            }
+            
+            if (origMedia) {
+                const clone = origMedia.cloneNode(true);
+                clone.style.cssText = `
+                    max-width: 100vw;
+                    max-height: 100vh;
+                    object-fit: contain;
+                    user-select: none;
+                    -webkit-user-drag: none;
+                `;
+
+                if (clone.tagName === 'VIDEO') {
+                    clone.controls = true;
+                    clone.autoplay = true;
+                }
+
+                mediaContainer.appendChild(clone);
+            }
+
+            // Close button — bottom-right OVER the image
+            const closeBtn = document.createElement('button');
+            closeBtn.innerHTML = '⛶';
+            closeBtn.style.cssText = `
+                position: absolute;
+                bottom: 20px;
+                right: 20px;
+                width: 40px;
+                height: 40px;
+                border-radius: 8px;
+                background: rgba(0, 0, 0, 0.6);
+                color: white;
+                border: none;
+                font-size: 20px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 10002;
+                -webkit-tap-highlight-color: transparent;
+                overflow: hidden;
+                line-height: 1;
+            `;
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                closeFullscreen();
+            });
+            mediaContainer.appendChild(closeBtn);
+
+            // Counter badge — only for carousel
+            if (hasMultipleSlides) {
+                const counter = document.createElement('span');
+                counter.style.cssText = `
+                    position: absolute;
+                    top: 20px;
+                    right: 20px;
+                    background: rgba(0, 0, 0, 0.6);
+                    color: white;
+                    font-size: 13px;
+                    font-weight: 600;
+                    padding: 6px 12px;
+                    border-radius: 14px;
+                    z-index: 10002;
+                    pointer-events: none;
+                    user-select: none;
+                `;
+                counter.textContent = `${index + 1}/${allSlides.length}`;
+                mediaContainer.appendChild(counter);
+            }
+
+            mediaContainer.style.opacity = '1';
+        }, 150);
+    };
+
+    // Initial slide
+    showSlide(currentFullscreenIndex);
+
+    // Navigation: go next
+    const goNext = () => {
+        if (!hasMultipleSlides || isSingleMedia) return;
+        if (currentFullscreenIndex >= allSlides.length - 1) return;
+        currentFullscreenIndex++;
+        showSlide(currentFullscreenIndex);
+    };
+
+    // Navigation: go prev
+    const goPrev = () => {
+        if (!hasMultipleSlides || isSingleMedia) return;
+        if (currentFullscreenIndex <= 0) return;
+        currentFullscreenIndex--;
+        showSlide(currentFullscreenIndex);
+    };
+
+    // Keyboard navigation
+    let closeFullscreen; // declared here for circular reference
+    const handleKey = (e) => {
+        if (e.key === 'ArrowRight') goNext();
+        else if (e.key === 'ArrowLeft') goPrev();
+        else if (e.key === 'Escape') closeFullscreen();
+    };
+
+    // Mouse wheel handler (only for carousel)
+    let wheelTimeout = null;
+    const handleWheel = (e) => {
+        if (!hasMultipleSlides || isSingleMedia) return;
         e.preventDefault();
-    });
-    carousel.addEventListener('mouseup', (e) => {
-        if (!isDragging) return;
-        isDragging = false;
-        carousel.style.cursor = 'grab';
-        const diffX = e.clientX - dragStartX;
-        if (Math.abs(diffX) > 50) {
-            if (diffX > 0) carouselPrev(postId);
-            else carouselNext(postId);
+        if (wheelTimeout) return;
+        wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 400);
+
+        if (e.deltaY > 0 || e.deltaX > 0) {
+            goNext();
+        } else {
+            goPrev();
+        }
+    };
+
+    // Close function (defined after handleKey and handleWheel)
+    closeFullscreen = () => {
+        const video = fullscreenOverlay?.querySelector('video');
+        if (video) video.pause();
+        fullscreenOverlay?.remove();
+        fullscreenOverlay = null;
+        document.removeEventListener('keydown', handleKey);
+        document.removeEventListener('wheel', handleWheel, { capture: true });
+    };
+
+    // Register event listeners
+    document.addEventListener('keydown', handleKey);
+    if (hasMultipleSlides && !isSingleMedia) {
+        document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    }
+
+    // Touch swipe — full snap replace (carousel only)
+    if (hasMultipleSlides && !isSingleMedia) {
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let isSwiping = false;
+
+        fullscreenOverlay.addEventListener('touchstart', (e) => {
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+            isSwiping = false;
+        }, { passive: true });
+
+        fullscreenOverlay.addEventListener('touchmove', (e) => {
+            const diffX = Math.abs(e.touches[0].clientX - touchStartX);
+            const diffY = Math.abs(e.touches[0].clientY - touchStartY);
+            
+            if (diffX > diffY && diffX > 30) {
+                isSwiping = true;
+            }
+        }, { passive: true });
+
+        fullscreenOverlay.addEventListener('touchend', (e) => {
+            if (!isSwiping) return;
+            
+            const diffX = e.changedTouches[0].clientX - touchStartX;
+            
+            if (Math.abs(diffX) > 60) {
+                if (diffX > 0) goPrev();
+                else goNext();
+            }
+            isSwiping = false;
+        }, { passive: true });
+    }
+
+    fullscreenOverlay.appendChild(mediaContainer);
+    document.body.appendChild(fullscreenOverlay);
+
+    // Tap on background to close
+    fullscreenOverlay.addEventListener('click', (e) => {
+        if (e.target === fullscreenOverlay || e.target === mediaContainer) {
+            closeFullscreen();
         }
     });
-    carousel.addEventListener('mouseleave', () => {
-        isDragging = false;
-        carousel.style.cursor = 'grab';
-    });
-    carousel.style.cursor = 'grab';
+}
+
+// Public function for HTML onclick (carousel)
+function openFullscreen(mediaElement) {
+    toggleFullscreen(mediaElement);
+}
+
+// Public function for single media inline
+function openInlineFullscreen(mediaElement) {
+    toggleFullscreen(mediaElement);
 }
 
 function carouselPrev(postId) {
     const state = carouselState[postId];
     if (!state) return;
 
-    const slides = document.querySelectorAll(`#carousel-${postId} .carousel-slide`);
-    const dots = document.querySelectorAll(`#carousel-${postId} .dot`);
-    const counter = document.querySelector(`#carousel-${postId} .carousel-counter`);
+    const carousel = document.getElementById(`carousel-${postId}`);
+    if (!carousel) return;
+    
+    const slides = carousel.querySelectorAll('.carousel-slide');
+    const dots = carousel.querySelectorAll('.dot');
+    const counter = carousel.querySelector('.carousel-counter');
 
-    slides[state.currentIndex].style.display = 'none';
+    // Pause video in current slide
+    const currentVideo = slides[state.currentIndex]?.querySelector('video');
+    if (currentVideo) {
+        currentVideo.pause();
+        currentVideo.muted = true;
+    }
+
+    // Deactivate current slide
+    slides[state.currentIndex].classList.remove('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.remove('active');
 
+    // Activate new slide
     state.currentIndex = (state.currentIndex - 1 + slides.length) % slides.length;
-
-    slides[state.currentIndex].style.display = 'flex';
+    slides[state.currentIndex].classList.add('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.add('active');
     if (counter) counter.textContent = `${state.currentIndex + 1}/${slides.length}`;
+
+    // Register video in new slide
+    const newVideo = slides[state.currentIndex]?.querySelector('video');
+    if (newVideo) {
+        registerVideo(newVideo);
+    }
 }
 
 function carouselNext(postId) {
     const state = carouselState[postId];
     if (!state) return;
 
-    const slides = document.querySelectorAll(`#carousel-${postId} .carousel-slide`);
-    const dots = document.querySelectorAll(`#carousel-${postId} .dot`);
-    const counter = document.querySelector(`#carousel-${postId} .carousel-counter`);
+    const carousel = document.getElementById(`carousel-${postId}`);
+    if (!carousel) return;
+    
+    const slides = carousel.querySelectorAll('.carousel-slide');
+    const dots = carousel.querySelectorAll('.dot');
+    const counter = carousel.querySelector('.carousel-counter');
 
-    slides[state.currentIndex].style.display = 'none';
+    // Pause video in current slide
+    const currentVideo = slides[state.currentIndex]?.querySelector('video');
+    if (currentVideo) {
+        currentVideo.pause();
+        currentVideo.muted = true;
+    }
+
+    // Deactivate current slide
+    slides[state.currentIndex].classList.remove('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.remove('active');
 
+    // Activate new slide
     state.currentIndex = (state.currentIndex + 1) % slides.length;
-
-    slides[state.currentIndex].style.display = 'flex';
+    slides[state.currentIndex].classList.add('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.add('active');
     if (counter) counter.textContent = `${state.currentIndex + 1}/${slides.length}`;
+
+    // Register video in new slide
+    const newVideo = slides[state.currentIndex]?.querySelector('video');
+    if (newVideo) {
+        registerVideo(newVideo);
+    }
 }
 
 function carouselGoTo(postId, index) {
     const state = carouselState[postId];
     if (!state) return;
 
-    const slides = document.querySelectorAll(`#carousel-${postId} .carousel-slide`);
-    const dots = document.querySelectorAll(`#carousel-${postId} .dot`);
-    const counter = document.querySelector(`#carousel-${postId} .carousel-counter`);
+    const carousel = document.getElementById(`carousel-${postId}`);
+    if (!carousel) return;
+    
+    const slides = carousel.querySelectorAll('.carousel-slide');
+    const dots = carousel.querySelectorAll('.dot');
+    const counter = carousel.querySelector('.carousel-counter');
 
-    slides[state.currentIndex].style.display = 'none';
+    // Pause video in current slide
+    const currentVideo = slides[state.currentIndex]?.querySelector('video');
+    if (currentVideo) {
+        currentVideo.pause();
+        currentVideo.muted = true;
+    }
+
+    // Deactivate current slide
+    slides[state.currentIndex].classList.remove('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.remove('active');
 
+    // Activate target slide
     state.currentIndex = index;
-
-    slides[state.currentIndex].style.display = 'flex';
+    slides[state.currentIndex].classList.add('active');
     if (dots[state.currentIndex]) dots[state.currentIndex].classList.add('active');
     if (counter) counter.textContent = `${state.currentIndex + 1}/${slides.length}`;
+
+    // Register video in new slide
+    const newVideo = slides[state.currentIndex]?.querySelector('video');
+    if (newVideo) {
+        registerVideo(newVideo);
+    }
 }
 
 function getAvatarEmoji(username) {
@@ -292,6 +722,68 @@ function getAvatarEmoji(username) {
     }
     return emojis[Math.abs(hash) % emojis.length];
 }
+
+// Setup scroll-based video management
+let scrollVideoObserver = null;
+
+function setupScrollVideoManagement() {
+    if (!scrollVideoObserver) {
+        scrollVideoObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                const postEl = entry.target;
+                const postId = postEl.dataset.postId;
+                if (!postId) return;
+                
+                if (entry.isIntersecting && entry.intersectionRatio > 0.6) {
+                    // Post is visible - allow videos to play
+                    postEl.dataset.visible = 'true';
+                } else {
+                    // Post is not visible - pause all videos
+                    postEl.dataset.visible = 'false';
+                    pauseCarouselVideos(postId);
+                }
+            });
+        }, {
+            threshold: [0, 0.6]
+        });
+    }
+    
+    // Observe all post elements
+    const posts = document.querySelectorAll('.post');
+    posts.forEach(post => {
+        if (post.dataset.postId) {
+            scrollVideoObserver.observe(post);
+        }
+    });
+}
+
+// Handle scroll events to pause videos outside viewport
+let scrollTimeout = null;
+window.addEventListener('scroll', () => {
+    if (scrollTimeout) return;
+    
+    scrollTimeout = setTimeout(() => {
+        scrollTimeout = null;
+        
+        const viewportTop = window.scrollY;
+        const viewportBottom = viewportTop + window.innerHeight;
+        
+        // Check all videos
+        activeVideos.forEach((_, video) => {
+            const rect = video.getBoundingClientRect();
+            const videoTop = rect.top + viewportTop;
+            const videoBottom = videoTop + rect.height;
+            
+            // Check if video is mostly in viewport
+            const isVisible = videoBottom > viewportTop && videoTop < viewportBottom;
+            
+            if (!isVisible) {
+                video.pause();
+                video.muted = true;
+            }
+        });
+    }, 100);
+}, { passive: true });
 
 async function toggleLike(postId, btn) {
     try {
@@ -421,17 +913,37 @@ async function sharePost(postId) {
 }
 
 function formatDate(dateString) {
-    const date = new Date(dateString);
+    if (!dateString) return '';
+    
+    let date;
+    try {
+        // If already has timezone info, parse as-is
+        if (dateString.includes('T') && (dateString.includes('Z') || dateString.includes('+') || dateString.includes('-', 10))) {
+            date = new Date(dateString);
+        } else {
+            // SQLite format without timezone — treat as UTC
+            date = new Date(dateString + 'Z');
+        }
+        
+        if (isNaN(date.getTime())) {
+            console.warn('Invalid date:', dateString);
+            return '';
+        }
+    } catch (e) {
+        console.warn('Date parse error:', dateString);
+        return '';
+    }
+    
     const now = new Date();
     const diff = Math.floor((now - date) / 1000 / 60);
-    
+
     if (diff < 1) return 'just now';
     if (diff < 60) return `${diff}m ago`;
     if (diff < 1440) return `${Math.floor(diff / 60)}h ago`;
     if (diff < 10080) return `${Math.floor(diff / 1440)}d ago`;
-    
-    return date.toLocaleDateString('en-US', { 
-        month: 'short', 
+
+    return date.toLocaleDateString('en-US', {
+        month: 'short',
         day: 'numeric',
         year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined
     });
@@ -443,6 +955,89 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
+
+// === Tags & Subscriptions ===
+
+async function loadTags() {
+    try {
+        const res = await apiFetch('/api/tags');
+        if (!res.ok) return;
+        const data = await res.json();
+        allTags = data.tags || [];
+        renderTagCloud();
+    } catch (e) {
+        console.error('Load tags error:', e);
+    }
+}
+
+function renderTagCloud() {
+    const cloud = document.getElementById('tagCloud');
+    if (!cloud || allTags.length === 0) {
+        if (cloud) cloud.style.display = 'none';
+        return;
+    }
+    cloud.style.display = 'flex';
+    cloud.innerHTML = allTags.slice(0, 30).map(t => `
+        <div class="tag-cloud-item" onclick="filterByTag('${escapeHtml(t.name)}')">
+            #${escapeHtml(t.name)}
+            <span class="tag-subscribe ${t.user_subscribed ? 'subscribed' : ''}" 
+                  onclick="event.stopPropagation(); toggleSubscribeTag(${t.id}, this)">
+                ${t.user_subscribed ? '🔔' : '○'}
+            </span>
+        </div>
+    `).join('');
+}
+
+async function toggleSubscribeUser(userId, btn) {
+    try {
+        const res = await apiFetch(`/api/tags/subscribe/user/${userId}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            btn.classList.toggle('subscribed', data.subscribed);
+            btn.textContent = data.subscribed ? '✓ Subscribed' : '+ Follow';
+        }
+    } catch (e) {
+        console.error('Subscribe error:', e);
+    }
+}
+
+async function toggleSubscribeTag(tagId, el) {
+    try {
+        const res = await apiFetch(`/api/tags/subscribe/tag/${tagId}`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            el.classList.toggle('subscribed', data.subscribed);
+            el.innerHTML = data.subscribed ? '🔔' : '○';
+            // Reload tags to update cloud
+            loadTags();
+        }
+    } catch (e) {
+        console.error('Subscribe tag error:', e);
+    }
+}
+
+function setFilter(filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.filter-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.filter === filter);
+    });
+    // Deselect tag filter buttons
+    document.querySelectorAll('.filter-tag-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.tag === filter);
+    });
+    loadFeed();
+}
+
+function filterByTag(tagName) {
+    currentFilter = `tag:${tagName}`;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.filter-tag-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.tag === `tag:${tagName}`);
+    });
+    loadFeed();
+}
+
+// === Tags & Subscriptions (loadFeed is defined below) ===
 
 function showError(message) {
     console.error(message);
@@ -545,7 +1140,6 @@ document.getElementById('logoutBtn')?.addEventListener('click', async () => {
     try {
         await apiFetch('/api/auth/logout', { method: 'POST' });
         currentUser = null;
-        selectedMedia = null;
         showAuth();
     } catch (e) {
         console.error('Logout error:', e);
@@ -574,11 +1168,21 @@ const uploadModal = document.getElementById('uploadModal');
 const closeUpload = document.getElementById('closeUpload');
 const mediaInput = document.getElementById('mediaInput');
 const uploadArea = document.getElementById('uploadArea');
-const previewContainer = document.getElementById('previewContainer');
+const uploadDropzone = document.getElementById('uploadDropzone');
+const uploadLabel = document.getElementById('uploadLabel');
+const previewGrid = document.getElementById('previewGrid');
 const captionInput = document.getElementById('captionInput');
 const charCount = document.getElementById('charCount');
+const fileCountEl = document.getElementById('fileCount');
 const uploadSubmit = document.getElementById('uploadSubmit');
 const uploadError = document.getElementById('uploadError');
+const uploadWarning = document.getElementById('uploadWarning');
+const uploadProgress = document.getElementById('uploadProgress');
+const progressFill = document.getElementById('progressFill');
+const progressText = document.getElementById('progressText');
+
+const MAX_FILES = 10;
+let selectedFiles = []; // Array of { file, previewUrl, compressed }
 
 // Настройки сжатия изображений на клиенте
 const IMAGE_RESIZE_CONFIG = {
@@ -598,39 +1202,43 @@ function resizeImage(file) {
         // Видео не сжимаем
         if (file.type.startsWith('video/')) return resolve(file);
 
-        const img = new Image();
-        img.onload = () => {
-            URL.revokeObjectURL(img.src);
+        const reader = new FileReader();
+        reader.onload = () => {
+            const img = new Image();
+            img.onload = () => {
 
-            let { width, height } = img;
-            const { maxWidth, maxHeight } = IMAGE_RESIZE_CONFIG;
+                let { width, height } = img;
+                const { maxWidth, maxHeight } = IMAGE_RESIZE_CONFIG;
 
-            // Уменьшаем, если больше максимума
-            if (width > maxWidth || height > maxHeight) {
-                const ratio = Math.min(maxWidth / width, maxHeight / height);
-                width = Math.round(width * ratio);
-                height = Math.round(height * ratio);
-            }
+                // Уменьшаем, если больше максимума
+                if (width > maxWidth || height > maxHeight) {
+                    const ratio = Math.min(maxWidth / width, maxHeight / height);
+                    width = Math.round(width * ratio);
+                    height = Math.round(height * ratio);
+                }
 
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            ctx.imageSmoothingEnabled = true;
-            ctx.imageSmoothingQuality = 'high';
-            ctx.drawImage(img, 0, 0, width, height);
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.drawImage(img, 0, 0, width, height);
 
-            canvas.toBlob(
-                (blob) => {
-                    if (blob) resolve(blob);
-                    else reject(new Error('Canvas toBlob failed'));
-                },
-                IMAGE_RESIZE_CONFIG.outputType,
-                IMAGE_RESIZE_CONFIG.quality
-            );
+                canvas.toBlob(
+                    (blob) => {
+                        if (blob) resolve(blob);
+                        else reject(new Error('Canvas toBlob failed'));
+                    },
+                    IMAGE_RESIZE_CONFIG.outputType,
+                    IMAGE_RESIZE_CONFIG.quality
+                );
+            };
+            img.onerror = () => reject(new Error('Failed to load image for compression'));
+            img.src = reader.result; // data: URL — всегда разрешено в CSP
         };
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = URL.createObjectURL(file);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
     });
 }
 
@@ -649,102 +1257,225 @@ uploadModal?.addEventListener('click', (e) => {
     }
 });
 
+// Drag and drop
+uploadDropzone?.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    uploadDropzone.classList.add('drag-over');
+});
+
+uploadDropzone?.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    uploadDropzone.classList.remove('drag-over');
+});
+
+uploadDropzone?.addEventListener('drop', (e) => {
+    e.preventDefault();
+    uploadDropzone.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files);
+    handleFilesSelect(files);
+});
+
 mediaInput?.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+    const files = Array.from(e.target.files);
+    handleFilesSelect(files);
+    // Reset input so same files can be re-selected
+    mediaInput.value = '';
+});
 
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
-    if (!allowedTypes.includes(file.type)) {
-        uploadError.textContent = 'Invalid file type. Please upload an image or video.';
-        uploadError.style.display = 'block';
-        return;
-    }
+/**
+ * Converts a File to data: URL (CSP-safe alternative to blob: URLs)
+ */
+function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+    });
+}
 
-    // Validate file size (10MB)
-    if (file.size > 10485760) {
-        uploadError.textContent = 'File is too large. Maximum size is 10MB.';
-        uploadError.style.display = 'block';
-        return;
-    }
+function handleFilesSelect(files) {
+    handleFilesSelectAsync(files).catch(e => console.error('handleFilesSelect error:', e));
+}
 
+async function handleFilesSelectAsync(files) {
     uploadError.style.display = 'none';
-    selectedMedia = file;
 
-    // Show preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        previewContainer.innerHTML = '';
-        
-        if (file.type.startsWith('video/')) {
-            const video = document.createElement('video');
-            video.src = e.target.result;
-            video.className = 'preview-media';
-            video.controls = true;
-            previewContainer.appendChild(video);
-        } else {
-            const img = document.createElement('img');
-            img.src = e.target.result;
-            img.className = 'preview-media';
-            previewContainer.appendChild(img);
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
+    const maxSize = 10485760; // 10MB
+
+    for (const file of files) {
+        if (selectedFiles.length >= MAX_FILES) {
+            uploadError.textContent = `Maximum ${MAX_FILES} files per post.`;
+            uploadError.style.display = 'block';
+            break;
         }
 
-        const removeBtn = document.createElement('button');
-        removeBtn.className = 'preview-remove';
-        removeBtn.textContent = 'Remove';
-        removeBtn.onclick = resetUploadForm;
-        previewContainer.appendChild(removeBtn);
+        if (!allowedTypes.includes(file.type)) {
+            uploadError.textContent = `Invalid file type: ${file.name}. Please upload JPEG, PNG, WebP, GIF, MP4, or WebM.`;
+            uploadError.style.display = 'block';
+            continue;
+        }
 
-        previewContainer.style.display = 'flex';
-        uploadSubmit.disabled = false;
-    };
-    reader.readAsDataURL(file);
-});
+        if (file.size > maxSize) {
+            uploadError.textContent = `File too large: ${file.name}. Maximum size is 10MB.`;
+            uploadError.style.display = 'block';
+            continue;
+        }
+
+        // Create preview URL using FileReader → data: URL (CSP-safe)
+        const previewUrl = await fileToDataUrl(file);
+        selectedFiles.push({ file, previewUrl, compressed: null });
+    }
+
+    renderPreviewGrid();
+    updateFileCounter();
+    updateWarning();
+}
+
+function renderPreviewGrid() {
+    previewGrid.innerHTML = '';
+
+    if (selectedFiles.length === 0) {
+        previewGrid.style.display = 'none';
+        uploadLabel.style.display = 'flex';
+        uploadSubmit.disabled = true;
+        return;
+    }
+
+    previewGrid.style.display = 'grid';
+    uploadLabel.style.display = selectedFiles.length < MAX_FILES ? 'flex' : 'none';
+
+    selectedFiles.forEach((item, index) => {
+        const div = document.createElement('div');
+        div.className = 'preview-grid-item';
+
+        if (item.file.type.startsWith('video/')) {
+            const video = document.createElement('video');
+            video.src = item.previewUrl;
+            video.muted = true;
+            video.preload = 'metadata';
+            div.appendChild(video);
+        } else {
+            const img = document.createElement('img');
+            img.src = item.previewUrl;
+            img.loading = 'lazy';
+            div.appendChild(img);
+        }
+
+        // File index badge
+        const indexBadge = document.createElement('span');
+        indexBadge.className = 'file-index';
+        indexBadge.textContent = index + 1;
+        div.appendChild(indexBadge);
+
+        // Remove button
+        const removeBtn = document.createElement('button');
+        removeBtn.textContent = '×';
+        removeBtn.className = 'preview-remove';
+        removeBtn.onclick = () => {
+            URL.revokeObjectURL(item.previewUrl);
+            selectedFiles.splice(index, 1);
+            renderPreviewGrid();
+            updateFileCounter();
+            updateWarning();
+        };
+        div.appendChild(removeBtn);
+
+        previewGrid.appendChild(div);
+    });
+
+    uploadSubmit.disabled = false;
+}
+
+function updateFileCounter() {
+    fileCountEl.textContent = selectedFiles.length;
+}
+
+function updateWarning() {
+    const imageCount = selectedFiles.filter(f => f.file.type.startsWith('image/')).length;
+
+    if (imageCount > 3) {
+        uploadWarning.textContent = `⏱️ ${imageCount} images will be compressed. This may take a moment…`;
+        uploadWarning.style.display = 'block';
+    } else if (selectedFiles.length > 5) {
+        uploadWarning.textContent = `⏱️ ${selectedFiles.length} files — upload may take a moment.`;
+        uploadWarning.style.display = 'block';
+    } else {
+        uploadWarning.style.display = 'none';
+    }
+}
 
 captionInput?.addEventListener('input', () => {
     charCount.textContent = captionInput.value.length;
 });
 
 function resetUploadForm() {
-    selectedMedia = null;
+    // Revoke old preview URLs
+    selectedFiles.forEach(f => URL.revokeObjectURL(f.previewUrl));
+    selectedFiles = [];
     mediaInput.value = '';
-    previewContainer.innerHTML = '';
-    previewContainer.style.display = 'none';
+    previewGrid.innerHTML = '';
+    previewGrid.style.display = 'none';
+    uploadLabel.style.display = 'flex';
     captionInput.value = '';
     charCount.textContent = '0';
+    fileCountEl.textContent = '0';
     uploadSubmit.disabled = true;
+    uploadSubmit.style.display = 'block';
     uploadError.style.display = 'none';
+    uploadWarning.style.display = 'none';
+    uploadProgress.style.display = 'none';
+    progressFill.style.width = '0%';
+    // Reset tags
+    uploadTags = [];
+    if (tagInput) tagInput.value = '';
+    const selTags = document.getElementById('selectedTags');
+    if (selTags) selTags.innerHTML = '';
 }
 
 uploadSubmit?.addEventListener('click', async () => {
-    if (!selectedMedia) return;
+    if (selectedFiles.length === 0) return;
 
     uploadSubmit.disabled = true;
-    uploadSubmit.textContent = 'Processing...';
+    uploadSubmit.style.display = 'none';
+    uploadProgress.style.display = 'flex';
     uploadError.style.display = 'none';
+    uploadWarning.style.display = 'none';
 
     try {
-        // Сжимаем изображение перед отправкой (только для картинок)
-        let uploadFile = selectedMedia;
-        const originalSize = selectedMedia.size;
-
-        if (selectedMedia.type.startsWith('image/')) {
-            uploadSubmit.textContent = 'Compressing...';
-            uploadFile = await resizeImage(selectedMedia);
-
-            const compressedSize = uploadFile.size;
-            const ratio = ((1 - compressedSize / originalSize) * 100).toFixed(0);
-            console.log(`Image compressed: ${originalSize >> 10}KB → ${compressedSize >> 10}KB (${ratio}% smaller)`);
-        }
-
-        uploadSubmit.textContent = 'Publishing...';
-
         const formData = new FormData();
-        const fileName = uploadFile.type.startsWith('image/') ? `upload_${Date.now()}.jpg` : selectedMedia.name;
-        formData.append('media', uploadFile, fileName);
         if (captionInput.value.trim()) {
             formData.append('description', captionInput.value.trim());
         }
+        if (uploadTags.length > 0) {
+            formData.append('tags', JSON.stringify(uploadTags));
+        }
+
+        const totalFiles = selectedFiles.length;
+        let processedFiles = 0;
+
+        // Compress images one by one with progress
+        for (const item of selectedFiles) {
+            processedFiles++;
+            const percent = Math.round((processedFiles / totalFiles) * 50); // first 50% = compression
+            progressFill.style.width = `${percent}%`;
+            progressText.textContent = `Compressing ${processedFiles}/${totalFiles}…`;
+
+            if (item.file.type.startsWith('image/')) {
+                const compressed = await resizeImage(item.file);
+                item.compressed = compressed;
+                const fileName = `upload_${Date.now()}_${processedFiles}.jpg`;
+                formData.append('media', compressed, fileName);
+            } else {
+                // Video — send as-is
+                formData.append('media', item.file, item.file.name);
+            }
+        }
+
+        // Upload phase — second 50% of progress
+        progressFill.style.width = '60%';
+        progressText.textContent = 'Uploading…';
 
         const res = await apiFetch('/api/posts', {
             method: 'POST',
@@ -754,21 +1485,29 @@ uploadSubmit?.addEventListener('click', async () => {
         const data = await res.json();
 
         if (res.ok) {
-            uploadModal.style.display = 'none';
-            resetUploadForm();
-            loadFeed();
-            showNotification('Post published successfully!');
+            progressFill.style.width = '100%';
+            progressText.textContent = 'Published!';
+
+            setTimeout(() => {
+                uploadModal.style.display = 'none';
+                resetUploadForm();
+                loadFeed();
+                showNotification('Post published successfully!');
+            }, 500);
         } else {
             uploadError.textContent = data.error || 'Failed to create post';
             uploadError.style.display = 'block';
+            uploadSubmit.style.display = 'block';
+            uploadSubmit.disabled = false;
+            uploadProgress.style.display = 'none';
         }
     } catch (e) {
         uploadError.textContent = 'Network error. Please try again.';
         uploadError.style.display = 'block';
-        console.error('Upload error:', e);
-    } finally {
+        uploadSubmit.style.display = 'block';
         uploadSubmit.disabled = false;
-        uploadSubmit.textContent = 'Publish';
+        uploadProgress.style.display = 'none';
+        console.error('Upload error:', e);
     }
 });
 
@@ -827,5 +1566,260 @@ document.getElementById('regPassword')?.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') document.getElementById('registerBtn')?.click();
 });
 
+document.getElementById('forgotEmail')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') document.getElementById('forgotBtn')?.click();
+});
+
+document.getElementById('confirmPassword')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') document.getElementById('resetPasswordBtn')?.click();
+});
+
+// Forgot password
+document.getElementById('showForgot')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('authForm').style.display = 'none';
+    document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'block';
+    document.getElementById('forgotError').style.display = 'none';
+    document.getElementById('forgotSuccess').style.display = 'none';
+    document.getElementById('loginError').style.display = 'none';
+    document.getElementById('registerError').style.display = 'none';
+});
+
+document.getElementById('showLoginFromForgot')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('forgotForm').style.display = 'none';
+    document.getElementById('authForm').style.display = 'block';
+    document.getElementById('forgotError').style.display = 'none';
+    document.getElementById('forgotSuccess').style.display = 'none';
+});
+
+document.getElementById('forgotBtn')?.addEventListener('click', async () => {
+    const email = document.getElementById('forgotEmail').value.trim();
+    const errorEl = document.getElementById('forgotError');
+    const successEl = document.getElementById('forgotSuccess');
+
+    errorEl.style.display = 'none';
+    successEl.style.display = 'none';
+
+    if (!email) {
+        errorEl.textContent = 'Please enter your email';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        const res = await apiFetch('/api/auth/forgot-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            successEl.textContent = data.message || 'Reset link sent! Check your email.';
+            if (data.resetUrl) {
+                // Email not configured — show link directly
+                successEl.innerHTML = `${data.message}<br><a href="${data.resetUrl}">${data.resetUrl}</a>`;
+            }
+            successEl.style.display = 'block';
+        } else {
+            errorEl.textContent = data.error || 'Failed to send reset link';
+            errorEl.style.display = 'block';
+        }
+    } catch (e) {
+        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.style.display = 'block';
+    }
+});
+
+// Reset password (with token from URL)
+document.getElementById('resetPasswordBtn')?.addEventListener('click', async () => {
+    const newPassword = document.getElementById('newPassword').value;
+    const confirmPassword = document.getElementById('confirmPassword').value;
+    const errorEl = document.getElementById('resetError');
+    const successEl = document.getElementById('resetSuccess');
+
+    errorEl.style.display = 'none';
+    successEl.style.display = 'none';
+
+    if (!newPassword || !confirmPassword) {
+        errorEl.textContent = 'Please fill in both fields';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    if (newPassword !== confirmPassword) {
+        errorEl.textContent = 'Passwords do not match';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    if (newPassword.length < 8) {
+        errorEl.textContent = 'Password must be at least 8 characters';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+
+    if (!token) {
+        errorEl.textContent = 'Invalid reset link. Please request a new one.';
+        errorEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        const res = await apiFetch('/api/auth/reset-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, newPassword })
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+            successEl.textContent = data.message || 'Password reset successfully! You can now log in.';
+            successEl.style.display = 'block';
+            // Redirect to login after 2 seconds
+            setTimeout(() => {
+                window.location.search = '';
+                document.getElementById('resetPasswordForm').style.display = 'none';
+                document.getElementById('authForm').style.display = 'block';
+            }, 2000);
+        } else {
+            errorEl.textContent = data.error || 'Failed to reset password';
+            errorEl.style.display = 'block';
+        }
+    } catch (e) {
+        errorEl.textContent = 'Network error. Please try again.';
+        errorEl.style.display = 'block';
+    }
+});
+
+// Check URL for reset password token on page load
+function checkResetTokenInUrl() {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('token')) {
+        document.getElementById('authForm').style.display = 'none';
+        document.getElementById('registerForm').style.display = 'none';
+        document.getElementById('forgotForm').style.display = 'none';
+        document.getElementById('resetPasswordForm').style.display = 'block';
+    }
+}
+
 // Initialize
+checkResetTokenInUrl();
 checkAuth();
+
+// === Tag Input Handler ===
+const tagInput = document.getElementById('tagInput');
+const tagSuggestions = document.getElementById('tagSuggestions');
+const selectedTagsEl = document.getElementById('selectedTags');
+
+let tagInputTimeout = null;
+
+tagInput?.addEventListener('input', (e) => {
+    const value = e.target.value;
+    
+    // Check for comma — add as tag
+    if (value.includes(',')) {
+        const parts = value.split(',');
+        for (const part of parts) {
+            const trimmed = part.trim().toLowerCase().replace(/[^a-z0-9а-яё_-]/gi, '');
+            if (trimmed && trimmed.length > 0 && !uploadTags.includes(trimmed)) {
+                addUploadTag(trimmed);
+            }
+        }
+        e.target.value = '';
+        hideTagSuggestions();
+        return;
+    }
+
+    // Show suggestions
+    clearTimeout(tagInputTimeout);
+    tagInputTimeout = setTimeout(() => {
+        const query = value.trim().toLowerCase();
+        if (query.length < 1) {
+            hideTagSuggestions();
+            return;
+        }
+        
+        const matches = allTags.filter(t => t.name.includes(query)).slice(0, 8);
+        if (matches.length === 0) {
+            hideTagSuggestions();
+            return;
+        }
+        
+        tagSuggestions.innerHTML = matches.map(t => `
+            <div class="tag-suggestion" onclick="addUploadTag('${escapeHtml(t.name)}'); hideTagSuggestions(); tagInput.value = '';">
+                #${escapeHtml(t.name)}
+            </div>
+        `).join('');
+        tagSuggestions.style.display = 'block';
+    }, 150);
+});
+
+// Enter key to add tag
+tagInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const value = e.target.value.trim().toLowerCase().replace(/[^a-z0-9а-яё_-]/gi, '');
+        if (value && !uploadTags.includes(value)) {
+            addUploadTag(value);
+            e.target.value = '';
+            hideTagSuggestions();
+        }
+    }
+});
+
+function addUploadTag(name) {
+    const clean = name.toLowerCase().replace(/[^a-z0-9а-яё_-]/gi, '');
+    if (!clean || uploadTags.includes(clean)) return;
+    uploadTags.push(clean);
+    renderUploadTags();
+}
+
+function removeUploadTag(name) {
+    uploadTags = uploadTags.filter(t => t !== name);
+    renderUploadTags();
+}
+
+function renderUploadTags() {
+    if (!selectedTagsEl) return;
+    selectedTagsEl.innerHTML = uploadTags.map(t => `
+        <span class="selected-tag">
+            #${escapeHtml(t)}
+            <span class="remove-tag" onclick="removeUploadTag('${escapeHtml(t)}')">×</span>
+        </span>
+    `).join('');
+}
+
+function hideTagSuggestions() {
+    if (tagSuggestions) tagSuggestions.style.display = 'none';
+}
+
+// Close suggestions on outside click
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.tag-input-area')) {
+        hideTagSuggestions();
+    }
+});
+
+// === Feed Filter Buttons ===
+document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        setFilter(btn.dataset.filter);
+    });
+});
+
+// Load tags after auth
+const _origCheckAuth = checkAuth;
+checkAuth = async function() {
+    await _origCheckAuth();
+    if (currentUser) {
+        loadTags();
+    }
+};

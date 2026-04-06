@@ -27,6 +27,7 @@
                 <input type="email" id="email" placeholder="Email" required>
                 <input type="password" id="password" placeholder="Password" required>
                 <button id="loginBtn">Sign In</button>
+                <p><a href="#" id="showForgot">Forgot password?</a></p>
                 <p>Don't have an account? <a href="#" id="showRegister">Sign Up</a></p>
             </div>
 
@@ -42,8 +43,37 @@
                 <p>Already have an account? <a href="#" id="showLogin">Sign In</a></p>
             </div>
 
+            <!-- Forgot Password Form -->
+            <div id="forgotForm" class="auth-container" style="display: none;">
+                <h2>Reset Password</h2>
+                <div id="forgotError" class="error-message" style="display: none;"></div>
+                <div id="forgotSuccess" class="success-message" style="display: none;"></div>
+                <input type="email" id="forgotEmail" placeholder="Email" required>
+                <button id="forgotBtn">Send Reset Link</button>
+                <p>Remember your password? <a href="#" id="showLoginFromForgot">Sign In</a></p>
+            </div>
+
+            <!-- Reset Password Form (with token) -->
+            <div id="resetPasswordForm" class="auth-container" style="display: none;">
+                <h2>Set New Password</h2>
+                <div id="resetError" class="error-message" style="display: none;"></div>
+                <div id="resetSuccess" class="success-message" style="display: none;"></div>
+                <input type="password" id="newPassword" placeholder="New password (min. 8 characters)" required>
+                <input type="password" id="confirmPassword" placeholder="Confirm new password" required>
+                <button id="resetPasswordBtn">Reset Password</button>
+            </div>
+
             <!-- Feed -->
-            <div id="feed" style="display: none;"></div>
+            <div id="feed" style="display: none;">
+                <!-- Feed Filter Tabs -->
+                <div class="feed-filters" id="feedFilters" style="display: none;">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="subscribed">Subscriptions</button>
+                    <div class="filter-tag-container" id="filterTags"></div>
+                </div>
+                <!-- Tag Cloud -->
+                <div class="tag-cloud" id="tagCloud" style="display: none;"></div>
+            </div>
 
             <!-- Upload Modal -->
             <div id="uploadModal" class="modal" style="display: none;">
@@ -53,18 +83,35 @@
                         <button class="modal-close" id="closeUpload">&times;</button>
                     </div>
                     <div id="uploadError" class="error-message" style="display: none;"></div>
+                    <div id="uploadWarning" class="warning-message" style="display: none;"></div>
                     <div class="upload-area" id="uploadArea">
-                        <input type="file" id="mediaInput" accept="image/*,video/*" hidden>
-                        <label for="mediaInput" class="upload-label">
-                            <span class="upload-icon">📁</span>
-                            <span>Click to select media</span>
-                            <span class="upload-hint">JPEG, PNG, WebP, GIF, MP4, WebM (max 10MB)</span>
-                        </label>
-                        <div id="previewContainer" class="preview-container" style="display: none;"></div>
+                        <input type="file" id="mediaInput" accept="image/*,video/*" multiple hidden>
+                        <div class="upload-dropzone" id="uploadDropzone">
+                            <label for="mediaInput" class="upload-label" id="uploadLabel">
+                                <span class="upload-icon">📁</span>
+                                <span>Click or drag media here</span>
+                                <span class="upload-hint">Up to 10 files — JPEG, PNG, WebP, GIF, MP4, WebM (max 10MB each)</span>
+                            </label>
+                        </div>
+                        <div id="previewGrid" class="preview-grid" style="display: none;"></div>
                     </div>
-                    <textarea id="captionInput" placeholder="Write a caption..." maxlength="2200"></textarea>
-                    <div class="char-count"><span id="charCount">0</span>/2200</div>
+                    <div class="upload-footer">
+                        <div class="file-counter"><span id="fileCount">0</span>/10 files</div>
+                        <div class="tag-input-area">
+                            <input type="text" id="tagInput" class="tag-input" placeholder="Add tags (comma separated)" maxlength="200">
+                            <div id="tagSuggestions" class="tag-suggestions" style="display: none;"></div>
+                            <div id="selectedTags" class="selected-tags"></div>
+                        </div>
+                        <textarea id="captionInput" placeholder="Write a caption..." maxlength="2200"></textarea>
+                        <div class="char-count"><span id="charCount">0</span>/2200</div>
+                    </div>
                     <button id="uploadSubmit" class="upload-submit" disabled>Publish</button>
+                    <div id="uploadProgress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <span id="progressText">Processing...</span>
+                    </div>
                 </div>
             </div>
 

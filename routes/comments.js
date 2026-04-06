@@ -6,6 +6,51 @@ import { validateComment } from '../middleware/validation.js';
 const router = express.Router();
 const db = getDB();
 
+router.post('/batch', (req, res) => {
+    try {
+        const { postIds } = req.body;
+        if (!Array.isArray(postIds) || postIds.length === 0) {
+            return res.status(400).json({ error: 'postIds array is required' });
+        }
+
+        // Limit to prevent abuse
+        if (postIds.length > 50) {
+            return res.status(400).json({ error: 'Maximum 50 post IDs per request' });
+        }
+
+        const placeholders = postIds.map(() => '?').join(',');
+        const comments = db.prepare(`
+            SELECT c.post_id, c.id, c.user_id, c.text, c.created_at, u.username, u.avatar
+            FROM comments c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.post_id IN (${placeholders})
+            ORDER BY c.post_id, c.created_at DESC
+        `).all(...postIds);
+
+        // Group comments by post_id
+        const commentsByPost = {};
+        comments.forEach(c => {
+            if (!commentsByPost[c.post_id]) {
+                commentsByPost[c.post_id] = [];
+            }
+            commentsByPost[c.post_id].push({
+                id: c.id,
+                post_id: c.post_id,
+                user_id: c.user_id,
+                text: sanitizeInput(c.text),
+                username: c.username,
+                avatar: c.avatar,
+                created_at: c.created_at
+            });
+        });
+
+        res.json({ comments: commentsByPost });
+    } catch (error) {
+        console.error('Batch comments error:', error);
+        res.status(500).json({ error: 'Failed to load comments' });
+    }
+});
+
 router.get('/post/:postId', (req, res) => {
     try {
         const comments = db.prepare(`
@@ -16,7 +61,7 @@ router.get('/post/:postId', (req, res) => {
             ORDER BY c.created_at DESC
             LIMIT 20
         `).all(req.params.postId);
-        
+
         res.json({ comments: comments.map(c => ({ ...c, text: sanitizeInput(c.text) })) });
     } catch (error) {
         console.error('Get comments error:', error);

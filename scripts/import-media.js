@@ -1,24 +1,26 @@
 #!/usr/bin/env node
 /**
- * Cosmogram Bulk Media Import — двухэтапный
- * 
- * Этап 1: scan     — сканирует файлы, читает EXIF даты, сохраняет в import_queue
- * Этап 2: import   — читает import_queue, создаёт посты и копирует файлы
- * 
- * Использование:
- *   node scripts/import-media.js scan     — сканирование
- *   node scripts/import-media.js import   — импорт из очереди
- *   node scripts/import-media.js status   — статус очереди
- *   node scripts/import-media.js clear    — очистить очередь
- * 
- * Конфигурация ниже в CONFIG.
+ * Cosmogram Bulk Media Import — groups by folder AND time
+ *
+ * Key logic:
+ * • Files from DIFFERENT folders are NEVER merged into one post
+ * • Within a folder, files are grouped by time window (groupByMinutes)
+ * • Each folder is processed independently
+ *
+ * Usage:
+ *   node scripts/import-media.js scan     — scan files, save to queue
+ *   node scripts/import-media.js import   — import from queue (creates posts)
+ *   node scripts/import-media.js status   — show queue status
+ *   node scripts/import-media.js clear    — clear queue
+ *   node scripts/import-media.js reset    — reset all posts + media (keeps users)
+ *
+ * Configuration below in CONFIG.
  */
 
 import 'dotenv/config';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
-import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
@@ -27,20 +29,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ============================================================
-// КОНФИГУРАЦИЯ
+// CONFIGURATION
 // ============================================================
 const CONFIG = {
     sourceDir: '/opt/media/files/',
     thumbSourceDir: '/opt/media/thumbs/',
     username: 'admin',
-    groupByMinutes: 1440,         // группировка по дате (минуты)
-    dateFrom: '',                 // фильтр 'YYYY-MM-DD'
+    groupByMinutes: 1440,         // time window for grouping within a folder (minutes)
+    dateFrom: '',                 // filter 'YYYY-MM-DD'
     dateTo: '',
-    maxFiles: 0,                  // 0 = без лимита
+    maxFiles: 0,                  // 0 = no limit
     dryRun: false,
     recursive: true,
-    batchSize: 20,                // файлов в одном посте
-    skipThumbnails: false,        // используем готовые миниатюры из thumbSourceDir
+    batchSize: 20,                // max files in one post
+    skipThumbnails: false,
     thumbnailDir: path.join(__dirname, '../uploads/thumbnails'),
     thumbnailSize: 600,
     thumbnailQuality: 80,
@@ -69,28 +71,24 @@ function isAllowedType(filename) {
 }
 
 function readExifDate(filePath) {
-    // Быстрое чтение EXIF через exiftool (установлен вместе с exiftool-vendored)
-    // Если нет — fallback к stat
     try {
         const ext = path.extname(filePath).toLowerCase();
         if (['.jpg', '.jpeg', '.tiff', '.tif'].includes(ext)) {
-            // Прямой вызов exiftool — быстро для одного файла
             const result = execSync(
                 `exiftool -d "%Y:%m:%d %H:%M:%S" -DateTimeOriginal -s3 "${filePath}" 2>/dev/null`,
                 { timeout: 3000, maxBuffer: 1024 }
             ).toString().trim();
-            
+
             if (result && /^\d{4}:\d{2}:\d{2}/.test(result)) {
-                // Формат EXIF: 2024:01:15 10:30:00
                 const fixed = result.replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3');
                 return new Date(fixed);
             }
         }
     } catch (e) {
-        // exiftool не установлен или файл битый
+        // exiftool not available or file corrupted
     }
-    
-    // Fallback: дата создания файла
+
+    // Fallback: file creation/modification time
     try {
         const stats = fs.statSync(filePath);
         return new Date(stats.birthtimeMs || stats.mtimeMs);
@@ -100,18 +98,22 @@ function readExifDate(filePath) {
 }
 
 // ============================================================
-// Этап 1: СКАНИРОВАНИЕ
+// Stage 1: SCAN
 // ============================================================
 
 function scanFiles() {
     const db = getDB();
-    
-    // Создаём очередь импорта
+
+    // Drop old table (without folder_path) and recreate
+    db.exec('DROP TABLE IF EXISTS import_queue');
+
+    // Create queue table — includes folder_path for grouping
     db.exec(`
-        CREATE TABLE IF NOT EXISTS import_queue (
+        CREATE TABLE import_queue (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             source_path TEXT NOT NULL,
             filename TEXT NOT NULL,
+            folder_path TEXT NOT NULL,
             media_type TEXT NOT NULL,
             file_size INTEGER NOT NULL,
             file_date DATETIME NOT NULL,
@@ -120,32 +122,29 @@ function scanFiles() {
         );
         CREATE INDEX IF NOT EXISTS idx_import_queue_status ON import_queue(status);
         CREATE INDEX IF NOT EXISTS idx_import_queue_date ON import_queue(file_date);
-        CREATE INDEX IF NOT EXISTS idx_import_queue_status_date ON import_queue(status, file_date);
+        CREATE INDEX IF NOT EXISTS idx_import_queue_folder ON import_queue(folder_path);
+        CREATE INDEX IF NOT EXISTS idx_import_queue_status_folder_date ON import_queue(status, folder_path, file_date);
     `);
 
-    // Очищаем предыдущую очередь
-    db.exec('DELETE FROM import_queue');
-
     console.log('═══════════════════════════════════════════════');
-    console.log('  Этап 1: Сканирование файлов');
+    console.log('  Stage 1: Scanning files');
     console.log('═══════════════════════════════════════════════\n');
-    
+
     if (!fs.existsSync(CONFIG.sourceDir)) {
         console.error(`❌ Directory not found: ${CONFIG.sourceDir}`);
         process.exit(1);
     }
 
-    // Рекурсивный обход — сразу пишем в БД, без накопления в памяти
     console.log(`📁 Scanning: ${CONFIG.sourceDir}`);
 
     const insertQueue = db.prepare(`
-        INSERT INTO import_queue (source_path, filename, media_type, file_size, file_date)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO import_queue (source_path, filename, folder_path, media_type, file_size, file_date)
+        VALUES (?, ?, ?, ?, ?, ?)
     `);
 
     const insertBatch = db.transaction((items) => {
         for (const item of items) {
-            insertQueue.run(item.sourcePath, item.filename, item.mediaType, item.fileSize, item.fileDate);
+            insertQueue.run(item.sourcePath, item.filename, item.folderPath, item.mediaType, item.fileSize, item.fileDate);
         }
     });
 
@@ -164,9 +163,13 @@ function scanFiles() {
                 const stats = fs.statSync(fullPath);
                 const fileDate = readExifDate(fullPath);
 
+                // folder_path is relative to sourceDir for clean grouping
+                const folderPath = path.relative(CONFIG.sourceDir, dir) || '.';
+
                 batch.push({
                     sourcePath: fullPath,
                     filename: path.basename(fullPath),
+                    folderPath: folderPath,
                     mediaType: getMediaType(fullPath),
                     fileSize: stats.size,
                     fileDate: fileDate.toISOString().slice(0, 19).replace('T', ' ')
@@ -182,14 +185,13 @@ function scanFiles() {
                         const speed = Math.round(fileCount / (Date.now() - startTime) * 1000);
                         console.log(`   ${fileCount} files processed (${speed} files/sec, ${elapsed}s elapsed)`);
                     }
-                    // GC hint — сбрасываем batch чтобы не держать в памяти
                 }
             }
         }
     }
     scanDir(CONFIG.sourceDir);
 
-    // Остаток batch
+    // Remaining batch
     if (batch.length > 0) {
         insertBatch(batch);
         batch = [];
@@ -198,30 +200,32 @@ function scanFiles() {
     console.log(`\n   Found ${fileCount} media files`);
 
     const count = db.prepare('SELECT COUNT(*) as count FROM import_queue').get();
+    const folderCount = db.prepare('SELECT COUNT(DISTINCT folder_path) as count FROM import_queue').get();
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
-    
+
     console.log(`\n   ✅ ${count.count} files saved to queue (${elapsed}s)`);
-    
-    // Статистика по датаам
+    console.log(`   📁 ${folderCount.count} unique folders`);
+
     const dateRange = db.prepare(`
         SELECT MIN(file_date) as min_date, MAX(file_date) as max_date FROM import_queue
     `).get();
     console.log(`   📅 Date range: ${dateRange.min_date} → ${dateRange.max_date}`);
-    
+
     db.close();
 }
 
 // ============================================================
-// Этап 2: ИМПОРТ
+// Stage 2: IMPORT
 // ============================================================
 
 function importFiles() {
     const db = getDB();
+    db.pragma('foreign_keys = ON');
     db.pragma('journal_mode = WAL');
     db.pragma('synchronous = NORMAL');
-    
+
     console.log('═══════════════════════════════════════════════');
-    console.log('  Этап 2: Импорт файлов');
+    console.log('  Stage 2: Importing files');
     console.log('═══════════════════════════════════════════════\n');
 
     const user = db.prepare('SELECT id, username FROM users WHERE username = ? AND active = 1').get(CONFIG.username);
@@ -269,36 +273,53 @@ function importFiles() {
     let errorCount = 0;
     const startTime = Date.now();
 
-    const CHUNK_SIZE = 2000;
+    // Get all unique folders
+    const folders = db.prepare(`
+        SELECT DISTINCT folder_path FROM import_queue WHERE status = 'pending'
+    `).all().map(f => f.folder_path);
 
-    while (true) {
-        const chunk = db.prepare(`
+    console.log(`📁 Processing ${folders.length} folder(s):\n`);
+    folders.forEach(f => console.log(`   • ${f === '.' ? '(root)' : f}`));
+    console.log('');
+
+    for (const folder of folders) {
+        console.log(`\n📂 Folder: ${folder === '.' ? '(root)' : folder}`);
+
+        // Get all pending files for this folder, sorted by date
+        const files = db.prepare(`
             SELECT * FROM import_queue
-            WHERE status = 'pending'
+            WHERE status = 'pending' AND folder_path = ?
             ORDER BY file_date ASC
-            LIMIT ?
-        `).all(CHUNK_SIZE);
+        `).all(folder);
 
-        if (chunk.length === 0) break;
+        if (files.length === 0) continue;
 
-        // Группируем по дате
+        // Group files by time window WITHIN this folder
         const groups = [];
-        let currentGroup = [chunk[0]];
-        let currentDate = new Date(chunk[0].file_date).getTime();
+        let currentGroup = [files[0]];
+        let currentDate = new Date(files[0].file_date).getTime();
         const thresholdMs = CONFIG.groupByMinutes * 60 * 1000;
 
-        for (let i = 1; i < chunk.length; i++) {
-            const fileDate = new Date(chunk[i].file_date).getTime();
-            if (Math.abs(fileDate - currentDate) <= thresholdMs && currentGroup.length < CONFIG.batchSize) {
-                currentGroup.push(chunk[i]);
-            } else {
+        for (let i = 1; i < files.length; i++) {
+            const fileDate = new Date(files[i].file_date).getTime();
+            const timeDiff = Math.abs(fileDate - currentDate);
+
+            // Start new group if:
+            // 1. Time difference exceeds threshold, OR
+            // 2. Current group reached batch size limit
+            if (timeDiff > thresholdMs || currentGroup.length >= CONFIG.batchSize) {
                 groups.push(currentGroup);
-                currentGroup = [chunk[i]];
+                currentGroup = [files[i]];
                 currentDate = fileDate;
+            } else {
+                currentGroup.push(files[i]);
             }
         }
         if (currentGroup.length > 0) groups.push(currentGroup);
 
+        console.log(`   📊 ${files.length} files → ${groups.length} post(s)`);
+
+        // Create posts for each group
         for (const group of groups) {
             if (group.length === 0) continue;
 
@@ -306,13 +327,16 @@ function importFiles() {
             const dateStr = firstDate.toLocaleDateString('ru-RU', {
                 year: 'numeric', month: 'long', day: 'numeric'
             });
+
+            // Include folder name in description if not root
+            const folderLabel = folder !== '.' ? `[${folder}] ` : '';
             const description = group.length > 1
-                ? `📸 ${group.length} фото — ${dateStr}`
-                : `📷 ${dateStr}`;
+                ? `📸 ${folderLabel}${group.length} фото — ${dateStr}`
+                : `📷 ${folderLabel}${dateStr}`;
             const createdAt = firstDate.toISOString();
 
             if (CONFIG.dryRun) {
-                console.log(`[DRY RUN] ${group.length} file(s) — ${dateStr}`);
+                console.log(`   [DRY RUN] ${group.length} file(s) — ${description}`);
                 for (const item of group) markDone.run(item.id);
                 successCount++;
                 continue;
@@ -329,7 +353,7 @@ function importFiles() {
 
                     try {
                         if (item.media_type === 'image') {
-                            // Для изображений — копия миниатюры (~8KB)
+                            // For images — copy thumbnail from thumbSourceDir
                             const baseName = path.basename(item.filename, ext);
                             const thumbRelDir = path.relative(CONFIG.sourceDir, path.dirname(item.source_path));
                             const thumbSourcePath = path.join(CONFIG.thumbSourceDir, thumbRelDir, `${baseName}.thumb.webp`);
@@ -339,19 +363,19 @@ function importFiles() {
                                 destPath = path.join(uploadDir, destName);
                                 fs.copyFileSync(thumbSourcePath, destPath);
                             } else {
-                                console.error(`  ⚠️  No thumb for ${item.filename}`);
+                                console.error(`      ⚠️  No thumb for ${item.filename}`);
                                 markError.run('Thumbnail not found', item.id);
                                 continue;
                             }
                         } else {
-                            // Для видео — симлинк на оригинал (быстро, без копирования)
+                            // For videos — create symlink to original
                             const destName = `${uuidv4()}${ext}`;
                             destPath = path.join(videoDir, destName);
                             fs.symlinkSync(item.source_path, destPath);
                         }
                         markDone.run(item.id);
                     } catch (e) {
-                        console.error(`  ⚠️  Skip ${item.filename}: ${e.message.substring(0, 60)}`);
+                        console.error(`      ⚠️  Skip ${item.filename}: ${e.message.substring(0, 60)}`);
                         markError.run(e.message.substring(0, 200), item.id);
                         continue;
                     }
@@ -362,18 +386,18 @@ function importFiles() {
                 successCount++;
             } catch (e) {
                 errorCount++;
-                console.error(`  ❌ Post error: ${e.message.substring(0, 100)}`);
+                console.error(`      ❌ Post error: ${e.message.substring(0, 100)}`);
                 for (const item of group) markError.run(e.message.substring(0, 200), item.id);
             }
         }
 
-        // Прогресс
+        // Progress
         const remaining = db.prepare("SELECT COUNT(*) as count FROM import_queue WHERE status = 'pending'").get();
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const speed = successCount > 0 ? Math.round(successCount / (elapsed / 60)) : 0;
         const eta = speed > 0 ? Math.round(remaining.count / speed) : '?';
-        
-        console.log(`✅ Posts: ${successCount} | Pending: ${remaining.count} | Speed: ${speed}/min | ETA: ~${eta}min`);
+
+        console.log(`   ✅ Done | Total posts: ${successCount} | Pending: ${remaining.count} | Speed: ${speed}/min | ETA: ~${eta}min`);
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
@@ -391,12 +415,12 @@ function importFiles() {
 }
 
 // ============================================================
-// Статус
+// Status
 // ============================================================
 
 function showStatus() {
     const db = getDB();
-    
+
     try {
         const total = db.prepare('SELECT COUNT(*) as count FROM import_queue').get();
         if (!total.count) {
@@ -408,6 +432,7 @@ function showStatus() {
         const pending = db.prepare("SELECT COUNT(*) as count FROM import_queue WHERE status = 'pending'").get();
         const done = db.prepare("SELECT COUNT(*) as count FROM import_queue WHERE status = 'done'").get();
         const errors = db.prepare("SELECT COUNT(*) as count FROM import_queue WHERE status = 'error'").get();
+        const folders = db.prepare("SELECT COUNT(DISTINCT folder_path) as count FROM import_queue").get();
 
         const dateRange = db.prepare(`
             SELECT MIN(file_date) as min_date, MAX(file_date) as max_date FROM import_queue
@@ -420,12 +445,13 @@ function showStatus() {
         console.log(`   Pending:  ${pending.count}`);
         console.log(`   Done:     ${done.count}`);
         console.log(`   Errors:   ${errors.count}`);
+        console.log(`   Folders:  ${folders.count}`);
         console.log(`   Dates:    ${dateRange.min_date} → ${dateRange.max_date}`);
         console.log('═══════════════════════════════════════════════');
     } catch (e) {
         console.log('📭 Queue does not exist. Run "scan" first.');
     }
-    
+
     db.close();
 }
 
@@ -455,10 +481,14 @@ switch (command) {
     case 'clear':
         clearQueue();
         break;
+    case 'reset':
+        // Execute reset script
+        execSync(`node ${path.join(__dirname, 'reset-database.js')}`, { stdio: 'inherit' });
+        break;
     default:
         console.log(`
 ╔═══════════════════════════════════════════════════╗
-║  Cosmogram Bulk Media Import (Two-Stage)          ║
+║  Cosmogram Bulk Media Import                      ║
 ╚═══════════════════════════════════════════════════╝
 
 ${'Usage:'}
@@ -469,20 +499,19 @@ ${'Commands:'}
   import  - Import files from queue (creates posts)
   status  - Show queue status
   clear   - Clear queue
+  reset   - Reset all posts and media (keeps users)
 
-${'Example:'}
-  # Step 1: Scan (быстро — только метаданные)
-  node scripts/import-media.js scan
-
-  # Step 2: Import (медленно — копирование файлов)
-  node scripts/import-media.js import
+${'Grouping logic:'}
+  • Files from DIFFERENT folders → separate posts
+  • Files within same folder + time window → one post
+  • Max ${CONFIG.batchSize} files per post
 
 ${'Config:'}
   Edit CONFIG at the top of the script to change:
   - sourceDir
   - username
   - groupByMinutes
-  - maxFiles
+  - batchSize
   - dryRun
 `);
         process.exit(0);

@@ -11,8 +11,19 @@ let dbInstance = null;
 export function getDB() {
     if (!dbInstance) {
         dbInstance = new Database(path.join(__dirname, '../data/media.db'));
+
+        // Performance and stability pragmas
         dbInstance.pragma('foreign_keys = ON');
         dbInstance.pragma('journal_mode = WAL');
+        dbInstance.pragma('busy_timeout = 5000');        // Wait 5s before SQLITE_BUSY error
+        dbInstance.pragma('cache_size = -64000');        // 64MB cache (negative = KB)
+        dbInstance.pragma('temp_store = MEMORY');         // Faster temp table operations
+        dbInstance.pragma('synchronous = NORMAL');        // Safe but faster than FULL
+        dbInstance.pragma('wal_autocheckpoint = 100');   // Checkpoint WAL every 100 pages (more aggressive)
+        dbInstance.pragma('mmap_size = 268435456');      // 256MB memory-mapped I/O
+
+        // Initial checkpoint to keep WAL small
+        dbInstance.pragma('wal_checkpoint(TRUNCATE)');
     }
     return dbInstance;
 }
@@ -76,11 +87,48 @@ export function initDatabase() {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS post_tags (
+            post_id INTEGER NOT NULL,
+            tag_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (post_id, tag_id),
+            FOREIGN KEY (post_id) REFERENCES posts(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            follower_id INTEGER NOT NULL,
+            following_user_id INTEGER,
+            tag_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(follower_id, following_user_id),
+            UNIQUE(follower_id, tag_id),
+            FOREIGN KEY (follower_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (following_user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
+            CHECK (
+                (following_user_id IS NOT NULL AND tag_id IS NULL) OR
+                (following_user_id IS NULL AND tag_id IS NOT NULL)
+            )
+        );
+
         CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
         CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
+        CREATE INDEX IF NOT EXISTS idx_post_media_post_id ON post_media(post_id);
         CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id);
         CREATE INDEX IF NOT EXISTS idx_likes_post_id ON likes(post_id);
         CREATE INDEX IF NOT EXISTS idx_likes_user_id ON likes(user_id);
+        CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);
+        CREATE INDEX IF NOT EXISTS idx_post_tags_tag_id ON post_tags(tag_id);
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_follower ON subscriptions(follower_id);
+        CREATE INDEX IF NOT EXISTS idx_subscriptions_following ON subscriptions(following_user_id);
     `;
 
     db.exec(tables);
