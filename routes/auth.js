@@ -16,9 +16,10 @@ router.post('/register', validateRegistration, async (req, res) => {
         const existingUser = db.prepare(
             'SELECT id FROM users WHERE username = ? OR email = ?'
         ).get(username, email);
-        
+
         if (existingUser) {
-            return res.status(400).json({ error: 'Username or email already exists' });
+            // Don't reveal WHICH field is taken (username vs email enumeration)
+            return res.status(400).json({ error: 'Registration failed. Please try different credentials.' });
         }
         
         const passwordHash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
@@ -138,14 +139,15 @@ router.post('/forgot-password', async (req, res) => {
 
         // Generate reset token
         const resetToken = crypto.randomBytes(32).toString('hex');
+        const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex'); // Store hashed
         const resetExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
-        // Store reset token in DB
+        // Create table if not exists
         db.prepare(`
             CREATE TABLE IF NOT EXISTS password_reset_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
-                token TEXT UNIQUE NOT NULL,
+                token_hash TEXT UNIQUE NOT NULL,
                 expires_at DATETIME NOT NULL,
                 used INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -153,10 +155,14 @@ router.post('/forgot-password', async (req, res) => {
             )
         `).exec();
 
+        // Store HASHED token (never store plain text token in DB)
         db.prepare(`
-            INSERT INTO password_reset_tokens (user_id, token, expires_at)
+            INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
             VALUES (?, ?, ?)
-        `).run(user.id, resetToken, resetExpires);
+        `).run(user.id, resetTokenHash, resetExpires);
+
+        // Log security event
+        console.log(`[SECURITY] Password reset requested: user_id=${user.id}, email=${user.email}`);
 
         // Build reset URL
         const baseUrl = process.env.APP_URL || 'http://localhost:8000';
@@ -201,14 +207,17 @@ router.post('/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Password must be at least 8 characters' });
         }
 
-        // Find valid token
+        // Hash the provided token to look it up in DB
+        const providedTokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+        // Find valid token by hash
         const resetRecord = db.prepare(`
             SELECT user_id, expires_at, used FROM password_reset_tokens
-            WHERE token = ?
-        `).get(token);
+            WHERE token_hash = ?
+        `).get(providedTokenHash);
 
         if (!resetRecord) {
-            return res.status(400).json({ error: 'Invalid reset token' });
+            return res.status(400).json({ error: 'Invalid or expired reset token' });
         }
 
         if (resetRecord.used) {
@@ -223,8 +232,8 @@ router.post('/reset-password', async (req, res) => {
         const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS) || 12);
         db.prepare('UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(passwordHash, resetRecord.user_id);
 
-        // Mark token as used
-        db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE token = ?').run(token);
+        // Mark token as used (one-time use)
+        db.prepare('UPDATE password_reset_tokens SET used = 1 WHERE token_hash = ?').run(providedTokenHash);
 
         res.json({ success: true, message: 'Password has been reset successfully' });
     } catch (error) {

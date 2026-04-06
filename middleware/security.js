@@ -1,4 +1,18 @@
 import xss from 'xss';
+import escapeHtml from 'escape-html';
+
+// Security event logger
+export function logSecurityEvent(req, action, details = {}) {
+    const logEntry = {
+        timestamp: new Date().toISOString(),
+        ip: req.ip || req.headers['x-forwarded-for'] || 'unknown',
+        user: req.user?.id || 'anonymous',
+        action,
+        details: JSON.stringify(details).slice(0, 500), // Limit to prevent log injection
+        ua: req.get('user-agent') || 'unknown'
+    };
+    console.warn(`[SECURITY] ${action}:`, JSON.stringify(logEntry));
+}
 
 export function preventXSS(req, res, next) {
     // Recursively sanitize all string values in req.body (handles nested objects)
@@ -60,6 +74,22 @@ export function securityHeaders(req, res, next) {
         'X-Content-Type-Options': 'nosniff',
         'X-XSS-Protection': '1; mode=block',
         'Referrer-Policy': 'strict-origin-when-cross-origin',
+        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+        // Content Security Policy — prevents XSS execution even if injection occurs
+        'Content-Security-Policy': [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline'",  // unsafe-inline needed for SPA event handlers
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob:",
+            "media-src 'self' blob: data:",
+            "connect-src 'self'",
+            "font-src 'self'",
+            "frame-ancestors 'none'",
+            "base-uri 'self'",
+            "form-action 'self'"
+        ].join('; ')
     });
     next();
 }
+
+export { escapeHtml };

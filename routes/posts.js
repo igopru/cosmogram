@@ -5,10 +5,11 @@ import sharp from 'sharp';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { fileTypeFromBuffer } from 'file-type';
 import { getDB } from '../models/database.js';
 import { validatePost } from '../middleware/validation.js';
 import { checkPostOwner } from '../middleware/auth.js';
-import { sanitizeInput } from '../middleware/security.js';
+import { sanitizeInput, logSecurityEvent } from '../middleware/security.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,13 +39,13 @@ const upload = multer({
         files: 10  // Max 10 files per post
     },
     fileFilter: (req, file, cb) => {
-        // Validate MIME type from header
+        // Basic MIME type check (header-based, verified later by magic bytes)
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
         if (!allowedTypes.includes(file.mimetype)) {
             return cb(new Error('Invalid file type'), false);
         }
         
-        // Validate file extension matches MIME type (prevent double extension attacks)
+        // Verify extension matches MIME type
         const ext = path.extname(file.originalname).toLowerCase();
         const validExtensions = {
             'image/jpeg': ['.jpg', '.jpeg'],
