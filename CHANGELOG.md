@@ -1,5 +1,77 @@
 # Changelog
 
+## [2.0.0] — 2026-04-08 🎉 **MAJOR RELEASE**
+
+> **Cosmogram 2.0** — Private, secure, local media gallery with full content management.
+> The most convenient and functional media service for personal and team use.
+
+### 🛡️ Security & Privacy
+- **100% Local** — all data stored on your server, no cloud dependencies
+- **JWT Authentication** — secure session management with httpOnly cookies
+- **Role-based access control** — admin and user roles with middleware enforcement
+- **Path validation** — all file operations restricted to allowed directories
+- **Rate limiting** — strict limits on API endpoints (login, posts, comments, likes)
+- **Security headers** — Helmet, CSP, XSS protection, frame-ancestors blocked
+- **Input sanitization** — express-mongo-sanitize, XSS filtering, validation middleware
+
+### 👑 Admin Panel
+- **Web-based admin interface** — no CLI needed, full control from browser
+- **⚙️ Admin button** in header (visible only to admin users)
+- **Folder browser** — view all source media folders at a glance
+- **Import queue management** — monitor pending/done/error statuses
+- **Queue clearing** — safe cleanup with confirmation
+
+### 🖼️ Preview Gallery with Selective Import
+- **Full folder preview** — see ALL files from ALL subfolders before importing
+- **Click to select** — choose exactly which photos/videos to include (up to 20 per post)
+- **Mix from subfolders** — combine files from different subfolders into one post
+- **Real-time counter** — shows selected/total/max count
+- **"Select First 20"** — quick select button
+- **Bad quality exclusion** — easily skip blurry, duplicate, or unwanted shots
+- **Auto-generated descriptions** — includes folder name, file count, and EXIF date
+
+### 🗑️ Granular Content Control
+- **Delete individual media** — remove specific photos/videos from any post
+  - **Owner:** can delete media from own posts
+  - **Admin:** can delete ANY media from ANY post
+- **Delete entire posts** — with confirmation and cascade cleanup
+- **Admin post deletion** — remove any post (with content moderation in mind)
+- **Smart UI updates** — carousel updates without full page reload
+
+### 🔧 Thumbnail Generation
+- **`generate-thumbnails.js`** — high-quality WebP thumbnails from originals
+- **Sharp library** — superior quality vs old pre-generated thumbnails
+- **Configurable** — width, quality, force regeneration, dry-run mode
+- **On-the-fly generation** — if thumbnail doesn't exist, generates automatically
+- **Video frame previews** — first frame extracted for video thumbnails
+
+### 🐛 Bug Fixes
+- **Login broken** — fixed `db.close()` calls in admin routes that broke shared DB connection
+- **Likes broken** — fixed `validateId` middleware mismatch with `:postId` parameter
+- **Admin button disappearing** — fixed `showFeed()` to restore admin button visibility
+- **Comment scroll jump** — removed `loadFeed()` after comment, now uses lightweight badge update
+- **Import queue migration** — automatic `ALTER TABLE` for existing databases adding `excluded` column
+- **Variable name collision** — renamed `selectedFiles` → `adminSelectedFiles` to avoid upload modal conflict
+
+### 📚 Documentation
+- **ADMIN_PANEL.md** — complete admin panel usage guide
+- **PREVIEW_AND_THUMBNAILS.md** — thumbnail generation and preview workflow
+- **SECURITY.md** — security architecture and hardening guide
+- **Updated README.md** — comprehensive feature list for 2.0
+
+### 📊 What Changed Since 1.x
+| Feature | 1.x | 2.0 |
+|---------|-----|-----|
+| Import method | CLI only, all-or-nothing | Web UI, selective, preview-first |
+| Media deletion | Whole post only | Individual photos/videos |
+| Admin controls | None | Full web panel |
+| Thumbnail quality | Old pre-generated | Sharp, high-quality, on-demand |
+| Comment UX | Full page reload | Lightweight update, no scroll jump |
+| Security headers | Basic | Full CSP, Helmet, XSS, rate limits |
+| Documentation | Minimal | Comprehensive guides |
+
+---
+
 ## [1.1.0] — 2026-04-06
 
 ### 🏷️ Теги и Подписки

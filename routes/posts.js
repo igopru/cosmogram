@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import { fileTypeFromBuffer } from 'file-type';
 import { getDB } from '../models/database.js';
 import { validatePost } from '../middleware/validation.js';
-import { checkPostOwner } from '../middleware/auth.js';
+import { checkPostOwner, validateSession } from '../middleware/auth.js';
 import { sanitizeInput, logSecurityEvent } from '../middleware/security.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -415,6 +415,82 @@ router.delete('/:id', checkPostOwner, (req, res) => {
     } catch (error) {
         console.error('Delete error:', error);
         res.status(500).json({ error: 'Failed to delete post' });
+    }
+});
+
+// DELETE /api/posts/media/:mediaId - Delete media from own post
+router.delete('/media/:mediaId', validateSession, (req, res) => {
+    try {
+        const db = getDB();
+        const mediaId = parseInt(req.params.mediaId);
+        if (isNaN(mediaId)) {
+            return res.status(400).json({ error: 'Invalid media ID' });
+        }
+
+        // Get media record and verify ownership
+        const media = db.prepare(`
+            SELECT pm.id, pm.post_id, pm.media_type, pm.media_path, pm.thumbnail_path, p.user_id as post_user_id
+            FROM post_media pm
+            JOIN posts p ON pm.post_id = p.id
+            WHERE pm.id = ?
+        `).get(mediaId);
+
+        if (!media) {
+            return res.status(404).json({ error: 'Media not found' });
+        }
+
+        // Check ownership
+        if (media.post_user_id !== req.userId) {
+            return res.status(403).json({ error: 'Not your post' });
+        }
+
+        // Delete media files
+        const allowedPrefixes = [
+            path.join(__dirname, '../uploads'),
+            path.join(__dirname, '../uploads/thumbnails')
+        ];
+
+        // Delete main media file
+        if (media.media_path) {
+            const resolvedPath = path.resolve(media.media_path);
+            const isAllowed = allowedPrefixes.some(prefix => resolvedPath.startsWith(prefix));
+            if (!isAllowed) {
+                console.error(`⚠️ Blocked suspicious file deletion: ${media.media_path}`);
+                return res.status(403).json({ error: 'File path not allowed' });
+            }
+            try {
+                fs.unlinkSync(resolvedPath);
+            } catch (e) {
+                if (e.code !== 'ENOENT') {
+                    console.error(`Failed to delete media ${media.media_path}:`, e.message);
+                }
+            }
+        }
+
+        // Delete thumbnail if exists
+        if (media.thumbnail_path) {
+            const resolvedPath = path.resolve(media.thumbnail_path);
+            const isAllowed = allowedPrefixes.some(prefix => resolvedPath.startsWith(prefix));
+            if (!isAllowed) {
+                console.error(`⚠️ Blocked suspicious thumbnail deletion: ${media.thumbnail_path}`);
+            } else {
+                try {
+                    fs.unlinkSync(resolvedPath);
+                } catch (e) {
+                    if (e.code !== 'ENOENT') {
+                        console.error(`Failed to delete thumbnail ${media.thumbnail_path}:`, e.message);
+                    }
+                }
+            }
+        }
+
+        // Delete media record from database
+        db.prepare('DELETE FROM post_media WHERE id = ?').run(mediaId);
+
+        res.json({ success: true, mediaId, postId: media.post_id });
+    } catch (error) {
+        console.error('Delete media error:', error);
+        res.status(500).json({ error: 'Failed to delete media' });
     }
 });
 

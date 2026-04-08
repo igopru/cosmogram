@@ -13,6 +13,7 @@
             <h1>MediaGallery</h1>
             <div class="header-actions">
                 <button id="themeToggle" title="Toggle theme">🌙</button>
+                <button id="adminBtn" style="display: none;" title="Admin Panel">⚙️</button>
                 <button id="uploadBtn" style="display: none;" title="New Post">📷</button>
                 <button id="profileBtn" style="display: none;" title="Profile">👤</button>
                 <button id="logoutBtn" style="display: none;" title="Logout">🚪</button>
@@ -140,6 +141,62 @@
                                 <span id="followingCount">0</span>
                                 <span>Following</span>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Panel Modal -->
+            <div id="adminModal" class="modal" style="display: none;">
+                <div class="modal-content admin-content">
+                    <div class="modal-header">
+                        <h2>⚙️ Admin Panel - Media Import</h2>
+                        <button class="modal-close" id="closeAdmin">&times;</button>
+                    </div>
+                    <div id="adminError" class="error-message" style="display: none;"></div>
+                    <div id="adminSuccess" class="success-message" style="display: none;"></div>
+
+                    <div class="admin-section">
+                        <h3>📁 Available Folders</h3>
+                        <p class="admin-hint">Click on a folder to preview files before importing</p>
+                        <div id="folderList" class="folder-list">
+                            <div class="loading">Loading folders...</div>
+                        </div>
+                    </div>
+
+                    <div class="admin-section" id="previewSection" style="display: none;">
+                        <h3>🖼️ Preview - <span id="previewFolderName"></span></h3>
+                        <p class="admin-hint">Click on photos to select them for import (max 20 per post). Click again to deselect.</p>
+                        <div class="preview-controls">
+                            <div class="preview-actions">
+                                <button id="selectAllBtn" class="admin-btn secondary">✅ Select First 20</button>
+                                <button id="deselectAllBtn" class="admin-btn secondary">❌ Clear Selection</button>
+                                <span class="preview-counter">
+                                    Selected: <span id="selectedCount">0</span> / <span id="totalCount">0</span> (max 20)
+                                </span>
+                            </div>
+                            <div id="previewGrid" class="preview-grid"></div>
+                            <div class="import-section">
+                                <button id="importSelectedBtn" class="admin-btn primary import-btn">
+                                    📥 Create Post with Selected (<span id="importCount">0</span>/20)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="admin-section">
+                        <h3>📋 Import Queue Status</h3>
+                        <div id="queueStatus">
+                            <div class="loading">Loading queue...</div>
+                        </div>
+                    </div>
+
+                    <div class="admin-section">
+                        <h3>🚀 Import Actions</h3>
+                        <div class="admin-actions">
+                            <button id="refreshFoldersBtn" class="admin-btn secondary">🔄 Refresh Folders</button>
+                            <button id="refreshQueueBtn" class="admin-btn secondary">🔄 Refresh Queue</button>
+                            <button id="clearQueueBtn" class="admin-btn danger">🗑️ Clear Queue</button>
                         </div>
                     </div>
                 </div>

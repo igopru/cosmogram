@@ -1,11 +1,11 @@
 import express from 'express';
 import { getDB } from '../models/database.js';
-import { validateId } from '../middleware/validation.js';
+import { validateNumericParam } from '../middleware/validation.js';
 
 const router = express.Router();
 const db = getDB();
 
-router.post('/toggle/:postId', validateId, (req, res) => {
+router.post('/toggle/:postId', validateNumericParam('postId'), (req, res) => {
     try {
         const postId = req.params.postId;
 

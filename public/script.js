@@ -115,6 +115,7 @@ function showAuth() {
     document.getElementById('logoutBtn').style.display = 'none';
     document.getElementById('uploadBtn').style.display = 'none';
     document.getElementById('profileBtn').style.display = 'none';
+    document.getElementById('adminBtn').style.display = 'none';
 }
 
 function showFeed() {
@@ -124,6 +125,12 @@ function showFeed() {
     document.getElementById('logoutBtn').style.display = 'block';
     document.getElementById('uploadBtn').style.display = 'block';
     document.getElementById('profileBtn').style.display = 'block';
+    
+    // Show admin button if user is admin
+    if (currentUser?.role === 'admin') {
+        document.getElementById('adminBtn').style.display = 'inline-block';
+    }
+    
     loadFeed();
 }
 
@@ -183,19 +190,22 @@ function createPostElement(post) {
 
     const mediaCount = post.media ? post.media.length : 0;
     const isOwner = Number(post.user_id) === Number(currentUser?.id);
+    const isAdmin = currentUser?.role === 'admin';
 
     // Определяем тип медиаконтейнера
     let mediaContainer;
+    const canDeleteMedia = isOwner || isAdmin;
     if (mediaCount > 1) {
         // Карусель для нескольких медиа
         mediaContainer = `
             <div class="post-media-carousel" id="carousel-${post.id}">
                 ${post.media.map((m, i) => `
-                    <div class="carousel-slide ${i === 0 ? 'active' : ''}" data-index="${i}">
+                    <div class="carousel-slide ${i === 0 ? 'active' : ''}" data-index="${i}" data-media-id="${m.id}">
                         ${m.media_type === 'video'
                             ? `<video src="${m.media_url}" controls preload="metadata" loop playsinline></video>`
                             : `<img src="${m.media_url}" alt="Post" loading="lazy">`}
                         <button class="fullscreen-enter-btn" onclick="openFullscreen(this.closest('.carousel-slide').querySelector('img, video'))" title="Fullscreen">⛶</button>
+                        ${canDeleteMedia ? `<button class="delete-media-btn" onclick="deleteMediaFromPost(${post.id}, ${m.id}, '${m.media_type}', this)" title="Delete this ${m.media_type}">🗑️</button>` : ''}
                     </div>
                 `).join('')}
                 ${mediaCount > 1 ? `
@@ -217,6 +227,7 @@ function createPostElement(post) {
                     ? `<video src="${m.media_url}" controls preload="metadata" loop playsinline></video>`
                     : `<img src="${m.media_url}" alt="Post" loading="lazy">`}
                 <button class="fullscreen-btn-inline" onclick="openInlineFullscreen(this.closest('.post-media-single').querySelector('img, video'))" title="Fullscreen">⛶</button>
+                ${canDeleteMedia ? `<button class="delete-media-btn single-media" onclick="deleteMediaFromPost(${post.id}, ${m.id}, '${m.media_type}', this)" title="Delete this ${m.media_type}">🗑️</button>` : ''}
             </div>
         `;
     } else {
@@ -234,6 +245,7 @@ function createPostElement(post) {
                 <div class="post-time">${formatDate(post.created_at)}</div>
             </div>
             ${isOwner ? `<button class="post-menu" onclick="deletePost(${post.id}, this)">🗑️</button>` : ''}
+            ${isAdmin && !isOwner ? `<button class="post-menu admin-delete-btn" onclick="adminDeletePost(${post.id}, this)" title="Admin delete">🗑️</button>` : ''}
         </div>
 
         ${mediaContainer}
@@ -829,6 +841,120 @@ async function deletePost(postId, btn) {
     }
 }
 
+// Admin delete any post
+async function adminDeletePost(postId, btn) {
+    if (!confirm('⚠️ Admin delete: Are you sure you want to delete this post? This cannot be undone.')) return;
+
+    try {
+        const res = await apiFetch(`/api/admin/posts/${postId}`, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            btn.closest('.post').remove();
+            currentFeed = currentFeed.filter(p => p.id !== postId);
+            showNotification('Post deleted by admin');
+        } else {
+            showError(data.error || 'Failed to delete post');
+        }
+    } catch (e) {
+        console.error('Admin delete error:', e);
+        showError('Failed to delete post');
+    }
+}
+
+// Delete single media from a post (owner or admin only)
+async function deleteMediaFromPost(postId, mediaId, mediaType, btn) {
+    const confirmMsg = mediaType === 'video'
+        ? 'Delete this video from the post?'
+        : 'Delete this photo from the post?';
+    
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        // Determine endpoint based on whether user is owner or admin
+        const post = currentFeed.find(p => p.id === postId);
+        const isOwner = Number(post?.user_id) === Number(currentUser?.id);
+        const isAdmin = currentUser?.role === 'admin';
+        
+        if (!isOwner && !isAdmin) {
+            showError('You can only delete media from your own posts');
+            return;
+        }
+
+        const endpoint = isAdmin ? `/api/admin/media/${mediaId}` : `/api/posts/media/${mediaId}`;
+        
+        const res = await apiFetch(endpoint, {
+            method: 'DELETE'
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            // Remove the slide from carousel
+            const slide = btn.closest('.carousel-slide, .post-media-single');
+            const carousel = btn.closest('.post-media-carousel, .post-media-single');
+            
+            if (carousel) {
+                const allSlides = carousel.querySelectorAll('.carousel-slide');
+                
+                if (allSlides.length <= 1) {
+                    // Last media deleted - reload feed to update UI
+                    showNotification('Media deleted');
+                    // Update the post in currentFeed
+                    if (post) {
+                        post.media = [];
+                    }
+                    // Simple approach: remove and re-render single post
+                    slide.closest('.post')?.remove();
+                    // Reload just this post's data would be ideal, but for now show notification
+                } else {
+                    // More slides remain - just remove this one
+                    slide.remove();
+                    
+                    // Update counter
+                    const remainingSlides = carousel.querySelectorAll('.carousel-slide');
+                    const counter = carousel.querySelector('.carousel-counter');
+                    if (counter) {
+                        const currentIndex = Math.min(
+                            Array.from(allSlides).indexOf(slide),
+                            remainingSlides.length - 1
+                        );
+                        counter.textContent = `${currentIndex + 1}/${remainingSlides.length}`;
+                        
+                        // Update dots
+                        const dotsContainer = carousel.querySelector('.carousel-dots');
+                        if (dotsContainer) {
+                            dotsContainer.innerHTML = Array.from(remainingSlides).map((_, i) => 
+                                `<span class="dot ${i === 0 ? 'active' : ''}" onclick="carouselGoTo(${postId}, ${i})"></span>`
+                            ).join('');
+                        }
+                        
+                        // Activate first slide if current was removed
+                        if (remainingSlides.length > 0) {
+                            remainingSlides.forEach((s, i) => {
+                                s.classList.toggle('active', i === 0);
+                            });
+                        }
+                    }
+                    
+                    // Update media array in currentFeed
+                    if (post && post.media) {
+                        post.media = post.media.filter(m => m.id !== mediaId);
+                    }
+                    
+                    showNotification(`${mediaType === 'video' ? 'Video' : 'Photo'} deleted`);
+                }
+            }
+        } else {
+            showError(data.error || 'Failed to delete media');
+        }
+    } catch (e) {
+        console.error('Delete media error:', e);
+        showError('Failed to delete media');
+    }
+}
+
 async function loadComments(postId) {
     try {
         const res = await apiFetch(`/api/comments/post/${postId}`);
@@ -870,8 +996,12 @@ async function addComment(postId) {
             input.value = '';
             const submitBtn = input.nextElementSibling;
             if (submitBtn) submitBtn.classList.remove('active');
+            
+            // Just reload comments for this post - no full feed refresh
             loadComments(postId);
-            loadFeed(); // Refresh to update comment count
+            
+            // Update comment count badge without full reload
+            updateCommentCountBadge(postId);
         } else {
             const data = await res.json();
             showError(data.error || 'Failed to add comment');
@@ -879,6 +1009,21 @@ async function addComment(postId) {
     } catch (e) {
         console.error('Add comment error:', e);
         showError('Failed to add comment');
+    }
+}
+
+// Update comment count badge without full feed reload
+async function updateCommentCountBadge(postId) {
+    try {
+        const res = await apiFetch(`/api/comments/post/${postId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const countEl = document.getElementById(`comment-count-${postId}`);
+        if (countEl) {
+            countEl.textContent = data.comments.length;
+        }
+    } catch (e) {
+        // Ignore errors - badge update is non-critical
     }
 }
 
@@ -1821,5 +1966,496 @@ checkAuth = async function() {
     await _origCheckAuth();
     if (currentUser) {
         loadTags();
+        // Show admin button for admin users
+        if (currentUser.role === 'admin') {
+            document.getElementById('adminBtn').style.display = 'inline-block';
+        }
     }
 };
+
+// === Admin Panel ===
+let adminModal = null;
+
+function openAdminPanel() {
+    if (!adminModal) adminModal = document.getElementById('adminModal');
+    if (adminModal) {
+        adminModal.style.display = 'flex';
+        loadAdminData();
+    }
+}
+
+function closeAdminPanel() {
+    if (!adminModal) adminModal = document.getElementById('adminModal');
+    if (adminModal) {
+        adminModal.style.display = 'none';
+        clearAdminMessages();
+    }
+}
+
+function showAdminError(message) {
+    const errorEl = document.getElementById('adminError');
+    if (errorEl) {
+        errorEl.textContent = message;
+        errorEl.style.display = 'block';
+        setTimeout(() => { errorEl.style.display = 'none'; }, 5000);
+    }
+}
+
+function showAdminSuccess(message) {
+    const successEl = document.getElementById('adminSuccess');
+    if (successEl) {
+        successEl.textContent = message;
+        successEl.style.display = 'block';
+        setTimeout(() => { successEl.style.display = 'none'; }, 5000);
+    }
+}
+
+function clearAdminMessages() {
+    const errorEl = document.getElementById('adminError');
+    const successEl = document.getElementById('adminSuccess');
+    if (errorEl) errorEl.style.display = 'none';
+    if (successEl) successEl.style.display = 'none';
+}
+
+async function loadAdminData() {
+    await Promise.all([
+        loadFolders(),
+        loadQueueStatus()
+    ]);
+}
+
+async function loadFolders() {
+    try {
+        const response = await apiFetch('/api/admin/media/sources');
+        const data = await response.json();
+        
+        const folderList = document.getElementById('folderList');
+        if (!folderList) return;
+        
+        if (!data.folders || data.folders.length === 0) {
+            folderList.innerHTML = '<div class="loading">No folders found in source directory</div>';
+            return;
+        }
+        
+        // Create map of imported folders
+        const importedMap = new Map();
+        if (data.importedFolders) {
+            data.importedFolders.forEach(f => {
+                importedMap.set(f.folder_path, f.file_count);
+            });
+        }
+        
+        folderList.innerHTML = data.folders.map(folder => {
+            const imported = importedMap.get(folder.name);
+            const importedCount = imported || 0;
+            const hasImported = importedCount > 0;
+            
+            return `
+                <div class="folder-item" data-folder="${escapeHtml(folder.name)}" id="folder-${escapeHtml(folder.name)}">
+                    <div class="folder-name">📁 ${escapeHtml(folder.label)}</div>
+                    <div class="folder-stats">
+                        ${hasImported ? `✓ ${importedCount} files imported` : 'Not imported yet'}
+                        <div class="folder-preview-hint">Click to preview</div>
+                    </div>
+                    <div class="folder-actions">
+                        <button class="admin-btn primary" onclick="event.stopPropagation(); scanFolder('${escapeHtml(folder.name)}')" style="flex: 1; font-size: 12px; padding: 6px;">
+                            🔍 Scan
+                        </button>
+                        <button class="admin-btn primary" onclick="event.stopPropagation(); importFolder('${escapeHtml(folder.name)}')" style="flex: 1; font-size: 12px; padding: 6px;">
+                            📥 Import
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+        
+        // Add click handler to preview
+        document.querySelectorAll('.folder-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const folder = item.dataset.folder;
+                previewFolder(folder);
+            });
+        });
+    } catch (error) {
+        console.error('Error loading folders:', error);
+        showAdminError('Failed to load folders: ' + error.message);
+    }
+}
+
+async function loadQueueStatus() {
+    try {
+        const response = await apiFetch('/api/admin/media/queue');
+        const data = await response.json();
+        
+        const queueStatus = document.getElementById('queueStatus');
+        if (!queueStatus) return;
+        
+        if (!data.hasQueue || data.total === 0) {
+            queueStatus.innerHTML = '<div class="loading">Queue is empty</div>';
+            return;
+        }
+        
+        let html = `
+            <div class="queue-stats">
+                <div class="queue-stat">
+                    <div class="queue-stat-value">${data.total}</div>
+                    <div class="queue-stat-label">Total</div>
+                </div>
+                <div class="queue-stat">
+                    <div class="queue-stat-value" style="color: #ffa500;">${data.pending}</div>
+                    <div class="queue-stat-label">Pending</div>
+                </div>
+                <div class="queue-stat">
+                    <div class="queue-stat-value" style="color: #00c853;">${data.done}</div>
+                    <div class="queue-stat-label">Done</div>
+                </div>
+                <div class="queue-stat">
+                    <div class="queue-stat-value" style="color: #ed4956;">${data.errors}</div>
+                    <div class="queue-stat-label">Errors</div>
+                </div>
+            </div>
+        `;
+        
+        if (data.folders && data.folders.length > 0) {
+            html += '<div class="queue-folders">';
+            html += data.folders.map(f => `
+                <div class="queue-folder-item">
+                    <div class="queue-folder-name">📁 ${escapeHtml(f.folder_path)}</div>
+                    <div class="queue-folder-stats">
+                        <span>⏳ ${f.pending}</span>
+                        <span>✓ ${f.done}</span>
+                        <span>✗ ${f.errors}</span>
+                    </div>
+                </div>
+            `).join('');
+            html += '</div>';
+        }
+        
+        queueStatus.innerHTML = html;
+    } catch (error) {
+        console.error('Error loading queue:', error);
+        showAdminError('Failed to load queue: ' + error.message);
+    }
+}
+
+// Preview and select photos (admin import)
+let currentPreviewFiles = [];
+let adminSelectedFiles = []; // Files selected for admin import
+let currentPreviewFolder = null;
+const MAX_FILES_PER_POST = 20;
+
+async function previewFolder(folderPath) {
+    currentPreviewFolder = folderPath;
+    adminSelectedFiles = [];
+    currentPreviewFiles = [];
+    
+    const previewSection = document.getElementById('previewSection');
+    const previewFolderName = document.getElementById('previewFolderName');
+    const previewGrid = document.getElementById('previewGrid');
+    
+    if (!previewSection || !previewGrid) return;
+    
+    // Show preview section
+    previewSection.style.display = 'block';
+    previewFolderName.textContent = folderPath;
+    previewGrid.innerHTML = '<div class="loading">Loading preview...</div>';
+    
+    try {
+        const response = await apiFetch(`/api/admin/media/scan-preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderPath, recursive: true })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Preview failed');
+        }
+        
+        currentPreviewFiles = data.files;
+        
+        if (data.subfolders && data.subfolders.length > 0) {
+            previewFolderName.textContent = `${folderPath} (${data.subfolders.length} subfolders, ${data.totalFiles} files)`;
+        }
+        
+        renderPreviewGrid();
+    } catch (error) {
+        console.error('Error previewing folder:', error);
+        showAdminError('Preview failed: ' + error.message);
+        previewGrid.innerHTML = '<div class="loading">Error loading preview</div>';
+    }
+}
+
+function renderPreviewGrid() {
+    const previewGrid = document.getElementById('previewGrid');
+    if (!previewGrid) return;
+    
+    if (currentPreviewFiles.length === 0) {
+        previewGrid.innerHTML = '<div class="loading">No files found</div>';
+        return;
+    }
+    
+    previewGrid.innerHTML = currentPreviewFiles.map((file, index) => {
+        const isSelected = adminSelectedFiles.some(f => f.relativePath === file.relativePath);
+        const fileSize = formatFileSize(file.fileSize);
+        const fileDate = new Date(file.fileDate).toLocaleDateString('ru-RU');
+        const folderBadge = file.folderPath !== currentPreviewFolder ? `<span class="folder-badge">${escapeHtml(file.folderPath)}</span>` : '';
+        
+        return `
+            <div class="preview-item ${isSelected ? 'selected' : ''}" data-index="${index}" onclick="toggleSelectFile(${index})">
+                <div class="preview-item-overlay">
+                    <img src="${file.thumbUrl}" alt="${escapeHtml(file.filename)}" loading="lazy">
+                    ${isSelected ? '<div class="selected-badge">✓</div>' : ''}
+                </div>
+                <div class="preview-item-info">
+                    <div class="preview-item-name" title="${escapeHtml(file.filename)}">${escapeHtml(file.filename)}</div>
+                    <div class="preview-item-meta">
+                        <span class="preview-item-size">${fileSize}</span>
+                        <span class="preview-item-date">${fileDate}</span>
+                    </div>
+                    ${folderBadge}
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    updatePreviewCounts();
+}
+
+function toggleSelectFile(index) {
+    const file = currentPreviewFiles[index];
+    if (!file) return;
+    
+    const existingIndex = adminSelectedFiles.findIndex(f => f.relativePath === file.relativePath);
+    
+    if (existingIndex >= 0) {
+        // Deselect
+        adminSelectedFiles.splice(existingIndex, 1);
+    } else {
+        // Select (check limit)
+        if (adminSelectedFiles.length >= MAX_FILES_PER_POST) {
+            showAdminError(`Maximum ${MAX_FILES_PER_POST} files per post`);
+            return;
+        }
+        adminSelectedFiles.push(file);
+    }
+    
+    renderPreviewGrid();
+}
+
+function updatePreviewCounts() {
+    const totalCount = document.getElementById('totalCount');
+    const selectedCount = document.getElementById('selectedCount');
+    const importCount = document.getElementById('importCount');
+    
+    if (!totalCount || !selectedCount || !importCount) return;
+    
+    const total = currentPreviewFiles.length;
+    const selected = adminSelectedFiles.length;
+    
+    totalCount.textContent = total;
+    selectedCount.textContent = selected;
+    importCount.textContent = selected;
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+async function importSelectedFolder() {
+    if (!currentPreviewFolder || currentPreviewFiles.length === 0) {
+        showAdminError('No folder selected for import');
+        return;
+    }
+    
+    if (adminSelectedFiles.length === 0) {
+        showAdminError('No files selected. Click on photos to select them first.');
+        return;
+    }
+    
+    if (adminSelectedFiles.length > MAX_FILES_PER_POST) {
+        showAdminError(`Maximum ${MAX_FILES_PER_POST} files per post`);
+        return;
+    }
+    
+    clearAdminMessages();
+    
+    // Prepare files for API - add relativePath
+    const filesForImport = adminSelectedFiles.map(file => {
+        // Extract relative path from sourcePath
+        const sourceDir = '/opt/media/files/';
+        let relativePath = file.sourcePath;
+        if (relativePath.startsWith(sourceDir)) {
+            relativePath = relativePath.substring(sourceDir.length);
+        }
+        return {
+            ...file,
+            relativePath
+        };
+    });
+    
+    try {
+        const response = await apiFetch('/api/admin/media/import-selected', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                files: filesForImport,
+                folderPath: currentPreviewFolder
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Import failed');
+        }
+        
+        showAdminSuccess(`✅ Created post with ${data.filesImported} files`);
+        
+        if (data.errors && data.errors.length > 0) {
+            console.warn('Import warnings:', data.errors);
+        }
+        
+        // Clear selection and hide preview
+        adminSelectedFiles = [];
+        document.getElementById('previewSection').style.display = 'none';
+        
+        await Promise.all([
+            loadQueueStatus(),
+            loadFolders()
+        ]);
+    } catch (error) {
+        console.error('Error importing:', error);
+        showAdminError('Import failed: ' + error.message);
+    }
+}
+
+// Select All / Deselect All
+function selectAllFiles() {
+    // Select up to MAX_FILES_PER_POST
+    adminSelectedFiles = currentPreviewFiles.slice(0, MAX_FILES_PER_POST);
+    renderPreviewGrid();
+}
+
+function deselectAllFiles() {
+    adminSelectedFiles = [];
+    renderPreviewGrid();
+}
+
+async function scanFolder(folderPath) {
+    const folderEl = document.getElementById(`folder-${folderPath}`);
+    if (!folderEl) return;
+    
+    folderEl.classList.add('scanning');
+    clearAdminMessages();
+    
+    try {
+        const response = await apiFetch('/api/admin/media/scan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderPath, recursive: true })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Scan failed');
+        }
+        
+        showAdminSuccess(`✅ Scanned ${data.filesFound} files from ${folderPath}`);
+        await loadQueueStatus();
+    } catch (error) {
+        console.error('Error scanning folder:', error);
+        showAdminError('Scan failed: ' + error.message);
+    } finally {
+        folderEl.classList.remove('scanning');
+    }
+}
+
+async function importFolder(folderPath) {
+    const folderEl = document.getElementById(`folder-${folderPath}`);
+    if (!folderEl) return;
+    
+    folderEl.classList.add('importing');
+    clearAdminMessages();
+    
+    try {
+        const response = await apiFetch('/api/admin/media/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderPath })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Import failed');
+        }
+        
+        if (data.postsCreated > 0) {
+            showAdminSuccess(`✅ Created ${data.postsCreated} posts from ${folderPath}`);
+            await Promise.all([
+                loadQueueStatus(),
+                loadFolders()
+            ]);
+        } else {
+            showAdminError('No pending files found for import');
+        }
+    } catch (error) {
+        console.error('Error importing folder:', error);
+        showAdminError('Import failed: ' + error.message);
+    } finally {
+        folderEl.classList.remove('importing');
+    }
+}
+
+async function clearQueue() {
+    if (!confirm('⚠️ Are you sure you want to clear the entire import queue? This cannot be undone.')) {
+        return;
+    }
+    
+    clearAdminMessages();
+    
+    try {
+        const response = await apiFetch('/api/admin/media/queue', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ confirm: 'YES_DELETE_ALL' })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Clear failed');
+        }
+        
+        showAdminSuccess('✅ Queue cleared');
+        await Promise.all([
+            loadQueueStatus(),
+            loadFolders()
+        ]);
+    } catch (error) {
+        console.error('Error clearing queue:', error);
+        showAdminError('Clear failed: ' + error.message);
+    }
+}
+
+// Admin panel event listeners
+document.getElementById('adminBtn')?.addEventListener('click', openAdminPanel);
+document.getElementById('closeAdmin')?.addEventListener('click', closeAdminPanel);
+document.getElementById('refreshFoldersBtn')?.addEventListener('click', loadFolders);
+document.getElementById('refreshQueueBtn')?.addEventListener('click', loadQueueStatus);
+document.getElementById('clearQueueBtn')?.addEventListener('click', clearQueue);
+document.getElementById('selectAllBtn')?.addEventListener('click', selectAllFiles);
+document.getElementById('deselectAllBtn')?.addEventListener('click', deselectAllFiles);
+document.getElementById('importSelectedBtn')?.addEventListener('click', importSelectedFolder);
+
+// Close admin modal on escape
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeAdminPanel();
+    }
+});
