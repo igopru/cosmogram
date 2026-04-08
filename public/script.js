@@ -2179,7 +2179,7 @@ async function previewFolder(folderPath) {
             previewFolderName.textContent = `${folderPath} (${data.subfolders.length} subfolders, ${data.totalFiles} files)`;
         }
         
-        renderPreviewGrid();
+        renderAdminPreviewGrid();
     } catch (error) {
         console.error('Error previewing folder:', error);
         showAdminError('Preview failed: ' + error.message);
@@ -2187,7 +2187,7 @@ async function previewFolder(folderPath) {
     }
 }
 
-function renderPreviewGrid() {
+function renderAdminPreviewGrid() {
     const adminPreviewGrid = document.getElementById('adminPreviewGrid');
     if (!adminPreviewGrid) return;
 
@@ -2241,7 +2241,7 @@ function toggleSelectFile(index) {
         adminSelectedFiles.push(file);
     }
     
-    renderPreviewGrid();
+    renderAdminPreviewGrid();
 }
 
 function updatePreviewCounts() {
@@ -2337,12 +2337,12 @@ async function importSelectedFolder() {
 function selectAllFiles() {
     // Select up to MAX_FILES_PER_POST
     adminSelectedFiles = currentPreviewFiles.slice(0, MAX_FILES_PER_POST);
-    renderPreviewGrid();
+    renderAdminPreviewGrid();
 }
 
 function deselectAllFiles() {
     adminSelectedFiles = [];
-    renderPreviewGrid();
+    renderAdminPreviewGrid();
 }
 
 async function scanFolder(folderPath) {
