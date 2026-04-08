@@ -1539,7 +1539,8 @@ body {
     color: var(--text-secondary);
 }
 
-.preview-grid {
+/* Admin preview grid (distinct from upload preview grid) */
+.admin-preview-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
     gap: 12px;
@@ -1550,6 +1551,7 @@ body {
     border-radius: 8px;
 }
 
+/* Admin preview items (distinct from upload preview) */
 .preview-item {
     position: relative;
     border-radius: 8px;

@@ -2151,14 +2151,14 @@ async function previewFolder(folderPath) {
     
     const previewSection = document.getElementById('previewSection');
     const previewFolderName = document.getElementById('previewFolderName');
-    const previewGrid = document.getElementById('previewGrid');
-    
-    if (!previewSection || !previewGrid) return;
-    
+    const adminPreviewGrid = document.getElementById('adminPreviewGrid');
+
+    if (!previewSection || !adminPreviewGrid) return;
+
     // Show preview section
     previewSection.style.display = 'block';
     previewFolderName.textContent = folderPath;
-    previewGrid.innerHTML = '<div class="loading">Loading preview...</div>';
+    adminPreviewGrid.innerHTML = '<div class="loading">Loading preview...</div>';
     
     try {
         const response = await apiFetch(`/api/admin/media/scan-preview`, {
@@ -2188,15 +2188,15 @@ async function previewFolder(folderPath) {
 }
 
 function renderPreviewGrid() {
-    const previewGrid = document.getElementById('previewGrid');
-    if (!previewGrid) return;
-    
+    const adminPreviewGrid = document.getElementById('adminPreviewGrid');
+    if (!adminPreviewGrid) return;
+
     if (currentPreviewFiles.length === 0) {
-        previewGrid.innerHTML = '<div class="loading">No files found</div>';
+        adminPreviewGrid.innerHTML = '<div class="loading">No files found</div>';
         return;
     }
-    
-    previewGrid.innerHTML = currentPreviewFiles.map((file, index) => {
+
+    adminPreviewGrid.innerHTML = currentPreviewFiles.map((file, index) => {
         const isSelected = adminSelectedFiles.some(f => f.relativePath === file.relativePath);
         const fileSize = formatFileSize(file.fileSize);
         const fileDate = new Date(file.fileDate).toLocaleDateString('ru-RU');
