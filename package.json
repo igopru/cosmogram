@@ -1,6 +1,6 @@
 {
   "name": "cosmogram",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Private local media gallery server with admin controls, selective import, and full content management",
   "main": "server.js",
   "type": "module",

@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.0.1] — 2026-04-08 🐛 **CRITICAL BUG FIXES**
+
+### Fixed
+- **🔥 Script.js SyntaxError** — Duplicate `renderPreviewGrid()` function caused entire frontend to fail loading. Renamed admin function to `renderAdminPreviewGrid()`.
+- **🔥 Post creation broken** — `POST /api/posts` missing `validateSession` middleware. `req.userId` was `undefined`, files not attaching to posts.
+- **🔥 Admin media delete crash** — Missing `db = getDB()` in admin routes caused `ReferenceError`.
+- **Duplicate `previewGrid` ID** — Two elements with same `id` caused CSS conflicts. Upload previews hidden, Publish button inactive. Renamed to `adminPreviewGrid` with `.admin-preview-grid` class.
+- **Wrong middleware on `/media/:mediaId`** — `checkPostOwner` looked for `req.params.id` instead of `mediaId`. Replaced with inline ownership validation.
+
+### Impact
+Without these fixes, **the entire frontend JavaScript failed to load**, making upload, likes, comments, and admin panel non-functional.
+
+---
+
 ## [2.0.0] — 2026-04-08 🎉 **MAJOR RELEASE**
 
 > **Cosmogram 2.0** — Private, secure, local media gallery with full content management.
