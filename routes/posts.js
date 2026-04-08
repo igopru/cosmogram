@@ -248,7 +248,7 @@ router.get('/feed', (req, res) => {
     }
 });
 
-router.post('/', upload.array('media', 20), validatePost, async (req, res) => {
+router.post('/', validateSession, upload.array('media', 20), validatePost, async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) {
             return res.status(400).json({ error: 'Media required' });
