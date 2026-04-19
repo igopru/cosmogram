@@ -34,3 +34,6 @@ build/
 
 # Audit logs
 data/.*-audit.json
+
+# Audit/Cache files
+data/.*-audit.json
