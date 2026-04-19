@@ -31,3 +31,6 @@ build/
 
 # Git
 .gitattributes
+
+# Audit logs
+data/.*-audit.json

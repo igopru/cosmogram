@@ -134,3 +134,83 @@
   ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
   To continue this session, run qwen --resume 55eca37b-d613-4bc7-9d26-46ea4cd7dc0d
+
+  ✦ ✅ Версия зафиксирована — Cosmogram 2.0.1
+
+    📦 Git State
+
+     1 Tags:
+     2   v2.0.0 — Initial 2.0 release
+     3   v2.0.1 — Critical bug fixes (current HEAD)
+     4 
+     5 Commits since 2.0.0:
+     6   54269e0 🔥 Critical fix: Add validateSession to POST /api/posts
+     7   a81c0c0 🐛 Fix: Duplicate previewGrid ID causing CSS conflict
+     8   dd461fa 🔥 CRITICAL FIX: Duplicate function name renderPreviewGrid
+     9   4687159 📝 Bump version to 2.0.1 — Critical bug fixes documented
+
+    📋 Version Summary
+
+
+    ┌─────────┬────────────┬─────────────────────────────────────────────────────────────────────┐
+    │ Version │ Date       │ Status                                                              │
+    ├─────────┼────────────┼─────────────────────────────────────────────────────────────────────┤
+    │ 2.0.0   │ 2026-04-08 │ 🎉 Major release — Admin panel, selective import, granular deletion │
+    │ 2.0.1   │ 2026-04-08 │ 🐛 Critical fixes — Upload broken, likes broken, JS syntax error    │
+    └─────────┴────────────┴─────────────────────────────────────────────────────────────────────┘
+
+
+    🔧 What's in 2.0.1
+
+     - ✅ Upload fixed — validateSession added to POST /api/posts
+     - ✅ Frontend loads — Duplicate renderPreviewGrid() renamed to renderAdminPreviewGrid()
+     - ✅ CSS conflict resolved — adminPreviewGrid + .admin-preview-grid separate from upload grid
+     - ✅ Admin delete works — db = getDB() added to admin routes
+     - ✅ User media delete works — Replaced checkPostOwner with inline validation
+
+    📄 Updated Files
+
+     - CHANGELOG.md — 2.0.1 patch notes added
+     - package.json — version bumped to 2.0.1
+     - Git tag v2.0.1 created with full changelog
+
+    Стабильная версия 2.0.1 готова к production. 🚀
+
+  > /quit
+
+  ╭──────────────────────────────────────────────────────────────────────────────────────────────────╮
+  │                                                                                                  │
+  │  Agent powering down. Goodbye!                                                                   │
+  │                                                                                                  │
+  │  Interaction Summary                                                                             │
+  │  Session ID:                 55eca37b-d613-4bc7-9d26-46ea4cd7dc0d                                │
+  │  Tool Calls:                 318 ( ✓ 318 x 0 )                                                   │
+  │  Success Rate:               100.0%                                                              │
+  │  Code Changes:               +3591 -636                                                          │
+  │                                                                                                  │
+  │  Performance                                                                                     │
+  │  Wall Time:                  35m 51s                                                             │
+  │  Agent Active:               2h 38m 12s                                                          │
+  │    » API Time:               1h 20m 31s (50.9%)                                                  │
+  │    » Tool Time:              1h 17m 41s (49.1%)                                                  │
+  │                                                                                                  │
+  │                                                                                                  │
+  │  Model Usage                  Reqs   Input Tokens  Output Tokens                                 │
+  │  ───────────────────────────────────────────────────────────────                                 │
+  │  coder-model                   288     28,498,804        109,287                                 │
+  │                                                                                                  │
+  │  Savings Highlight: 26,156,513 (91.8%) of input tokens were served from the cache, reducing      │
+  │  costs.                                                                                          │
+  │                                                                                                  │
+  │  » Tip: For a full token breakdown, run `/stats model`.                                          │
+  │                                                                                                  │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+  To continue this session, run qwen --resume 55eca37b-d613-4bc7-9d26-46ea4cd7dc0d
+
+
+
+
+
+
+
