@@ -37,3 +37,6 @@ data/.*-audit.json
 
 # Audit/Cache files
 data/.*-audit.json
+
+# of AI
+readme
