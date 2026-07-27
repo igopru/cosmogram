@@ -46,10 +46,18 @@ res.cookie('token', token, {
 
 **Middleware enforcement:**
 ```javascript
-requireAdmin     // Blocks non-admin users
-validateSession  // Blocks unauthenticated requests
-checkPostOwner   // Blocks users from accessing others' posts
+requireAdmin       // Blocks non-admin users
+validateSession    // Blocks unauthenticated requests
+optionalAuth       // Non-blocking — sets req.user or null for public endpoints
+checkPostOwner     // Blocks users from accessing others' posts
 ```
+
+### Public Feed Access
+- **`optionalAuth` middleware** — used for `/api/posts` and `/api/likes` routers
+- Unauthenticated requests receive `req.user = null` instead of 401
+- Feed returns only `is_public = 1` posts for guests
+- All write operations (create, update, delete) still require `validateSession`
+- `checkPostOwner` returns 401 if `req.userId` is falsy, preventing anonymous mutations
 
 ---
 

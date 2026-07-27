@@ -15,6 +15,7 @@
                 <button id="themeToggle" title="Toggle theme">🌙</button>
                 <button id="adminBtn" style="display: none;" title="Admin Panel">⚙️</button>
                 <button id="uploadBtn" style="display: none;" title="New Post">📷</button>
+                <button id="textPostBtn" style="display: none;" title="New Text Post">✍️</button>
                 <button id="profileBtn" style="display: none;" title="Profile">👤</button>
                 <button id="logoutBtn" style="display: none;" title="Logout">🚪</button>
             </div>
@@ -91,19 +92,26 @@
                             <label for="mediaInput" class="upload-label" id="uploadLabel">
                                 <span class="upload-icon">📁</span>
                                 <span>Click or drag media here</span>
-                                <span class="upload-hint">Up to 10 files — JPEG, PNG, WebP, GIF, MP4, WebM (max 10MB each)</span>
+                                <span class="upload-hint">Up to 10 files — JPEG, PNG, WebP, GIF, MP4, WebM (videos auto-compressed)</span>
                             </label>
                         </div>
                         <div id="previewGrid" class="preview-grid" style="display: none;"></div>
                     </div>
                     <div class="upload-footer">
                         <div class="file-counter"><span id="fileCount">0</span>/10 files</div>
+                        <div class="upload-visibility">
+                            <label class="visibility-toggle">
+                                <input type="checkbox" id="isPublicToggle" checked>
+                                <span class="toggle-slider"></span>
+                                <span class="toggle-label">🌍 Public — visible to everyone</span>
+                            </label>
+                        </div>
                         <div class="tag-input-area">
                             <input type="text" id="tagInput" class="tag-input" placeholder="Add tags (comma separated)" maxlength="200">
                             <div id="tagSuggestions" class="tag-suggestions" style="display: none;"></div>
                             <div id="selectedTags" class="selected-tags"></div>
                         </div>
-                        <textarea id="captionInput" placeholder="Write a caption..." maxlength="2200"></textarea>
+                        <textarea id="captionInput" placeholder="What's on your mind?" maxlength="2200"></textarea>
                         <div class="char-count"><span id="charCount">0</span>/2200</div>
                     </div>
                     <button id="uploadSubmit" class="upload-submit" disabled>Publish</button>
@@ -147,56 +155,105 @@
             </div>
 
             <!-- Admin Panel Modal -->
-            <div id="adminModal" class="modal" style="display: none;">
+            <div id="adminModal" class="modal admin-modal" style="display: none;">
                 <div class="modal-content admin-content">
-                    <div class="modal-header">
-                        <h2>⚙️ Admin Panel - Media Import</h2>
+                    <div class="admin-header">
+                        <div class="admin-header-left">
+                            <h2><span class="admin-logo">⚙️</span> Admin Panel</h2>
+                            <nav class="admin-tabs">
+                                <button class="admin-tab active" data-tab="folders">📁 Folders</button>
+                                <button class="admin-tab" data-tab="queue">📋 Queue</button>
+                                <button class="admin-tab" data-tab="actions">🚀 Actions</button>
+                            </nav>
+                        </div>
                         <button class="modal-close" id="closeAdmin">&times;</button>
                     </div>
-                    <div id="adminError" class="error-message" style="display: none;"></div>
-                    <div id="adminSuccess" class="success-message" style="display: none;"></div>
 
-                    <div class="admin-section">
-                        <h3>📁 Available Folders</h3>
-                        <p class="admin-hint">Click on a folder to preview files before importing</p>
-                        <div id="folderList" class="folder-list">
-                            <div class="loading">Loading folders...</div>
-                        </div>
+                    <div id="adminMessages">
+                        <div id="adminError" class="error-message" style="display: none;"></div>
+                        <div id="adminSuccess" class="success-message" style="display: none;"></div>
                     </div>
 
-                    <div class="admin-section" id="previewSection" style="display: none;">
-                        <h3>🖼️ Preview - <span id="previewFolderName"></span></h3>
-                        <p class="admin-hint">Click on photos to select them for import (max 20 per post). Click again to deselect.</p>
-                        <div class="preview-controls">
-                            <div class="preview-actions">
-                                <button id="selectAllBtn" class="admin-btn secondary">✅ Select First 20</button>
-                                <button id="deselectAllBtn" class="admin-btn secondary">❌ Clear Selection</button>
-                                <span class="preview-counter">
-                                    Selected: <span id="selectedCount">0</span> / <span id="totalCount">0</span> (max 20)
-                                </span>
+                    <div class="admin-body">
+                        <!-- Folders Tab -->
+                        <div class="admin-tab-content active" id="tab-folders">
+                            <div class="admin-toolbar">
+                                <div class="admin-search">
+                                    <span class="search-icon">🔍</span>
+                                    <input type="text" id="folderSearch" placeholder="Search folders..." class="admin-search-input">
+                                </div>
+                                <button id="refreshFoldersBtn" class="admin-btn secondary" title="Refresh folders">🔄 Refresh</button>
                             </div>
-                            <div id="adminPreviewGrid" class="admin-preview-grid"></div>
-                            <div class="import-section">
-                                <button id="importSelectedBtn" class="admin-btn primary import-btn">
-                                    📥 Create Post with Selected (<span id="importCount">0</span>/20)
-                                </button>
+                            <p class="admin-hint">Click on a folder to preview files before importing</p>
+                            <div id="folderList" class="folder-list">
+                                <div class="loading">Loading folders...</div>
+                            </div>
+
+                            <!-- Preview Section (inline, shown when a folder is clicked) -->
+                            <div id="previewSection" class="admin-preview-section" style="display: none;">
+                                <div class="preview-header">
+                                    <h3>🖼️ <span id="previewFolderName"></span></h3>
+                                    <button id="closePreview" class="admin-btn secondary small">✕ Close</button>
+                                </div>
+                                <p class="admin-hint">Click on files to select them for import (max 20 per post). Click again to deselect.</p>
+                                <div class="preview-controls">
+                                    <div class="preview-actions">
+                                        <button id="selectAllBtn" class="admin-btn secondary small">✅ Select First 20</button>
+                                        <button id="deselectAllBtn" class="admin-btn secondary small">❌ Clear Selection</button>
+                                        <span class="preview-counter">
+                                            Selected: <span id="selectedCount">0</span> / <span id="totalCount">0</span>
+                                        </span>
+                                    </div>
+                                    <div id="adminPreviewGrid" class="admin-preview-grid"></div>
+                                    <div class="import-section">
+                                        <button id="importSelectedBtn" class="admin-btn primary import-btn">
+                                            📥 Create Post with Selected (<span id="importCount">0</span>/20)
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <div class="admin-section">
-                        <h3>📋 Import Queue Status</h3>
-                        <div id="queueStatus">
-                            <div class="loading">Loading queue...</div>
+                        <!-- Queue Tab -->
+                        <div class="admin-tab-content" id="tab-queue">
+                            <div class="admin-toolbar">
+                                <h3>📋 Import Queue</h3>
+                                <button id="refreshQueueBtn" class="admin-btn secondary" title="Refresh queue">🔄 Refresh</button>
+                            </div>
+                            <div id="queueStatus">
+                                <div class="loading">Loading queue...</div>
+                            </div>
                         </div>
-                    </div>
 
-                    <div class="admin-section">
-                        <h3>🚀 Import Actions</h3>
-                        <div class="admin-actions">
-                            <button id="refreshFoldersBtn" class="admin-btn secondary">🔄 Refresh Folders</button>
-                            <button id="refreshQueueBtn" class="admin-btn secondary">🔄 Refresh Queue</button>
-                            <button id="clearQueueBtn" class="admin-btn danger">🗑️ Clear Queue</button>
+                        <!-- Actions Tab -->
+                        <div class="admin-tab-content" id="tab-actions">
+                            <h3>🚀 Import Actions</h3>
+                            <div class="actions-grid">
+                                <div class="action-card">
+                                    <div class="action-card-icon">🔄</div>
+                                    <div class="action-card-text">
+                                        <h4>Refresh Folders</h4>
+                                        <p>Reload the list of available media folders</p>
+                                    </div>
+                                    <button class="admin-btn secondary" onclick="loadFolders()">Go</button>
+                                </div>
+                                <div class="action-card">
+                                    <div class="action-card-icon">🔄</div>
+                                    <div class="action-card-text">
+                                        <h4>Refresh Queue</h4>
+                                        <p>Update import queue status information</p>
+                                    </div>
+                                    <button class="admin-btn secondary" onclick="loadQueueStatus()">Go</button>
+                                </div>
+                                <div class="action-card danger">
+                                    <div class="action-card-icon">🗑️</div>
+                                    <div class="action-card-text">
+                                        <h4>Clear Queue</h4>
+                                        <p>Remove all pending items from the import queue</p>
+                                    </div>
+                                    <button class="admin-btn danger" onclick="clearQueue()">Clear</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

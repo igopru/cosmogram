@@ -101,16 +101,66 @@ async function checkAuth() {
             currentUser = data.user;
             showFeed();
         } else {
-            showAuth();
+            currentUser = null;
+            showPublicMode();
         }
     } catch (e) {
-        showAuth();
+        currentUser = null;
+        showPublicMode();
     }
 }
 
 function showAuth() {
     document.getElementById('authForm').style.display = 'block';
     document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'none';
+    document.getElementById('feed').style.display = 'none';
+    document.getElementById('logoutBtn').style.display = 'none';
+    document.getElementById('uploadBtn').style.display = 'none';
+    document.getElementById('textPostBtn').style.display = 'none';
+    document.getElementById('profileBtn').style.display = 'none';
+    document.getElementById('adminBtn').style.display = 'none';
+    // Close admin modal if open
+    const adminModal = document.getElementById('adminModal');
+    if (adminModal) adminModal.style.display = 'none';
+}
+
+function showPublicMode() {
+    document.getElementById('authForm').style.display = 'none';
+    document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'none';
+    document.getElementById('feed').style.display = 'block';
+    document.getElementById('logoutBtn').style.display = 'none';
+    document.getElementById('uploadBtn').style.display = 'none';
+    document.getElementById('textPostBtn').style.display = 'none';
+    document.getElementById('profileBtn').style.display = 'none';
+    document.getElementById('adminBtn').style.display = 'none';
+    
+    // Add public mode banner if not already present
+    const feed = document.getElementById('feed');
+    let banner = document.getElementById('publicBanner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'publicBanner';
+        banner.className = 'public-banner';
+        banner.innerHTML = `
+            <div class="public-banner-content">
+                <span>👋 Browse public posts</span>
+                <button class="public-login-btn" onclick="showAuth()">Sign In</button>
+                <button class="public-register-btn" onclick="showRegister()">Sign Up</button>
+            </div>
+        `;
+        feed.parentNode.insertBefore(banner, feed);
+    }
+    banner.style.display = 'block';
+    
+    loadFeed();
+}
+
+function showRegister() {
+    document.getElementById('authForm').style.display = 'none';
+    document.getElementById('registerForm').style.display = 'block';
+    document.getElementById('forgotForm').style.display = 'none';
     document.getElementById('feed').style.display = 'none';
     document.getElementById('logoutBtn').style.display = 'none';
     document.getElementById('uploadBtn').style.display = 'none';
@@ -121,10 +171,16 @@ function showAuth() {
 function showFeed() {
     document.getElementById('authForm').style.display = 'none';
     document.getElementById('registerForm').style.display = 'none';
+    document.getElementById('forgotForm').style.display = 'none';
     document.getElementById('feed').style.display = 'block';
     document.getElementById('logoutBtn').style.display = 'block';
     document.getElementById('uploadBtn').style.display = 'block';
+    document.getElementById('textPostBtn').style.display = 'block';
     document.getElementById('profileBtn').style.display = 'block';
+    
+    // Hide public mode banner
+    const banner = document.getElementById('publicBanner');
+    if (banner) banner.style.display = 'none';
     
     // Show admin button if user is admin
     if (currentUser?.role === 'admin') {
@@ -186,9 +242,10 @@ function renderFeed() {
 function createPostElement(post) {
     const div = document.createElement('div');
     div.className = 'post';
-    div.dataset.postId = post.id; // Add post ID for video management
+    div.dataset.postId = post.id;
 
     const mediaCount = post.media ? post.media.length : 0;
+    const isLoggedIn = !!currentUser;
     const isOwner = Number(post.user_id) === Number(currentUser?.id);
     const isAdmin = currentUser?.role === 'admin';
 
@@ -231,7 +288,9 @@ function createPostElement(post) {
             </div>
         `;
     } else {
-        mediaContainer = '';
+        mediaContainer = post.description
+            ? `<div class="text-post-card">${escapeHtml(post.description)}</div>`
+            : `<div class="text-post-card text-post-empty">📝</div>`;
     }
 
     div.innerHTML = `
@@ -246,6 +305,7 @@ function createPostElement(post) {
             </div>
             ${isOwner ? `<button class="post-menu" onclick="deletePost(${post.id}, this)">🗑️</button>` : ''}
             ${isAdmin && !isOwner ? `<button class="post-menu admin-delete-btn" onclick="adminDeletePost(${post.id}, this)" title="Admin delete">🗑️</button>` : ''}
+            <button class="post-menu share-header-btn" onclick="sharePost(${post.id})" title="Share">🔗</button>
         </div>
 
         ${mediaContainer}
@@ -257,14 +317,20 @@ function createPostElement(post) {
         ` : ''}
 
         <div class="post-actions">
+            ${isLoggedIn ? `
             <button class="action-btn like-btn ${post.user_liked ? 'liked' : ''}" onclick="toggleLike(${post.id}, this)">${post.user_liked ? '❤️' : '🤍'}</button>
             <button class="action-btn" onclick="focusComment(${post.id})">💬</button>
             <button class="action-btn" onclick="sharePost(${post.id})">📤</button>
+            ` : `
+            <span class="public-like-count">❤️ ${post.likes_count || 0}</span>
+            <button class="action-btn" onclick="showAuth()">💬</button>
+            <button class="action-btn" onclick="sharePost(${post.id})">📤</button>
+            `}
         </div>
 
         <div class="post-likes" id="likes-${post.id}">${post.likes_count || 0} likes</div>
 
-        ${post.description ? `
+        ${post.description && mediaCount > 0 ? `
         <div class="post-caption">
             <strong>${escapeHtml(post.username)}</strong> ${escapeHtml(post.description)}
         </div>
@@ -280,10 +346,12 @@ function createPostElement(post) {
             `).join('') : ''}
         </div>
 
+        ${isLoggedIn ? `
         <div class="comment-form">
             <input type="text" id="comment-input-${post.id}" class="comment-input" placeholder="Add a comment..." maxlength="500">
             <button class="comment-submit" onclick="addComment(${post.id})">Post</button>
         </div>
+        ` : ''}
     `;
 
     if (mediaCount > 1) carouselInit(post.id);
@@ -314,6 +382,47 @@ function carouselInit(postId) {
     carousel.querySelectorAll('.carousel-slide').forEach(slide => {
         setupDoubleTapOnSlide(slide, carousel.id);
     });
+
+    // Touch swipe on mobile
+    setupCarouselSwipe(carousel, postId);
+}
+
+function setupCarouselSwipe(carousel, postId) {
+    let touchStartX = 0;
+    let touchStartY = 0;
+    let touchStartTime = 0;
+    let swiping = false;
+
+    carousel.addEventListener('touchstart', (e) => {
+        const touch = e.touches[0];
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        touchStartTime = Date.now();
+        swiping = false;
+    }, { passive: true });
+
+    carousel.addEventListener('touchmove', (e) => {
+        if (e.touches.length > 1) return; // ignore pinch
+        const touch = e.touches[0];
+        const diffX = touch.clientX - touchStartX;
+        const diffY = touch.clientY - touchStartY;
+
+        if (Math.abs(diffX) > Math.abs(diffY) && Math.abs(diffX) > 10) {
+            swiping = true;
+        }
+    }, { passive: true });
+
+    carousel.addEventListener('touchend', (e) => {
+        if (!swiping) return;
+        const diffX = e.changedTouches[0].clientX - touchStartX;
+        const elapsed = Date.now() - touchStartTime;
+
+        if (Math.abs(diffX) > 50 || (Math.abs(diffX) > 20 && elapsed < 300)) {
+            if (diffX > 0) carouselPrev(postId);
+            else carouselNext(postId);
+        }
+        swiping = false;
+    }, { passive: true });
 }
 
 // Double-tap tracking per slide (key: carouselId-slideIndex)
@@ -358,19 +467,14 @@ function setupDoubleTapOnSlide(slide, carouselId) {
 
 function toggleFullscreen(mediaElement) {
     if (!mediaElement) return;
-    
-    // Handle single media (not in carousel)
+
     const singleContainer = mediaElement.closest('.post-media-single');
     const isSingleMedia = !!singleContainer;
-    
-    // Handle carousel slide
     const slide = mediaElement.closest('.carousel-slide');
     const carousel = mediaElement.closest('.post-media-carousel');
     const allSlides = carousel ? Array.from(carousel.querySelectorAll('.carousel-slide')) : [];
     const currentSlideIndex = slide ? allSlides.indexOf(slide) : -1;
     const hasMultipleSlides = allSlides.length > 1;
-
-    // For single media, use the media itself as the "slide"
     const allMediaItems = isSingleMedia ? [mediaElement] : allSlides;
 
     if (fullscreenOverlay) {
@@ -384,18 +488,27 @@ function toggleFullscreen(mediaElement) {
     }
 
     let currentFullscreenIndex = isSingleMedia ? 0 : (currentSlideIndex >= 0 ? currentSlideIndex : 0);
+    let zoomState = { scale: 1, x: 0, y: 0 };
 
-    // Create overlay
+    function resetZoom() {
+        zoomState = { scale: 1, x: 0, y: 0 };
+        applyZoom();
+    }
+
+    function applyZoom() {
+        const img = mediaContainer.querySelector('img');
+        if (!img) return;
+        const { scale, x, y } = zoomState;
+        img.style.transform = scale > 1 ? `translate(${x}px, ${y}px) scale(${scale})` : '';
+        img.style.cursor = scale > 1 ? 'grab' : '';
+    }
+
     fullscreenOverlay = document.createElement('div');
     fullscreenOverlay.className = 'carousel-fullscreen-overlay';
     fullscreenOverlay.style.cssText = `
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        width: 100vw;
-        height: 100vh;
+        top: 0; left: 0; right: 0; bottom: 0;
+        width: 100vw; height: 100vh;
         background: rgba(0, 0, 0, 0.95);
         z-index: 10000;
         -webkit-tap-highlight-color: transparent;
@@ -405,37 +518,30 @@ function toggleFullscreen(mediaElement) {
         overflow: hidden;
     `;
 
-    // Container for single slide (replaced on swipe)
     const mediaContainer = document.createElement('div');
     mediaContainer.style.cssText = `
-        width: 100vw;
-        height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        width: 100vw; height: 100vh;
+        display: flex; align-items: center; justify-content: center;
         position: relative;
         transition: opacity 0.2s ease;
     `;
 
-    // Show media function
-    const showSlide = (index) => {
+    function showSlide(index) {
         mediaContainer.style.opacity = '0';
-        
+        resetZoom();
+
         setTimeout(() => {
             mediaContainer.innerHTML = '';
-            
+
             let origMedia;
-            
             if (isSingleMedia) {
-                // Single media — clone from the original element
                 origMedia = mediaElement;
             } else {
-                // Carousel — get from slide
                 const s = allSlides[index];
                 if (!s) return;
                 origMedia = s.querySelector('img, video');
             }
-            
+
             if (origMedia) {
                 const clone = origMedia.cloneNode(true);
                 clone.style.cssText = `
@@ -444,6 +550,7 @@ function toggleFullscreen(mediaElement) {
                     object-fit: contain;
                     user-select: none;
                     -webkit-user-drag: none;
+                    transition: transform 0.2s ease;
                 `;
 
                 if (clone.tagName === 'VIDEO') {
@@ -451,54 +558,35 @@ function toggleFullscreen(mediaElement) {
                     clone.autoplay = true;
                 }
 
+                if (clone.tagName === 'IMG') {
+                    setupPinchZoom(clone);
+                }
+
                 mediaContainer.appendChild(clone);
             }
 
-            // Close button — bottom-right OVER the image
             const closeBtn = document.createElement('button');
             closeBtn.innerHTML = '⛶';
             closeBtn.style.cssText = `
-                position: absolute;
-                bottom: 20px;
-                right: 20px;
-                width: 40px;
-                height: 40px;
-                border-radius: 8px;
-                background: rgba(0, 0, 0, 0.6);
-                color: white;
-                border: none;
-                font-size: 20px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                z-index: 10002;
-                -webkit-tap-highlight-color: transparent;
-                overflow: hidden;
+                position: absolute; bottom: 20px; right: 20px;
+                width: 40px; height: 40px; border-radius: 8px;
+                background: rgba(0,0,0,0.6); color: white; border: none;
+                font-size: 20px; cursor: pointer; display: flex;
+                align-items: center; justify-content: center;
+                z-index: 10002; -webkit-tap-highlight-color: transparent;
                 line-height: 1;
             `;
-            closeBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                closeFullscreen();
-            });
+            closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeFullscreen(); });
             mediaContainer.appendChild(closeBtn);
 
-            // Counter badge — only for carousel
             if (hasMultipleSlides) {
                 const counter = document.createElement('span');
                 counter.style.cssText = `
-                    position: absolute;
-                    top: 20px;
-                    right: 20px;
-                    background: rgba(0, 0, 0, 0.6);
-                    color: white;
-                    font-size: 13px;
-                    font-weight: 600;
-                    padding: 6px 12px;
-                    border-radius: 14px;
-                    z-index: 10002;
-                    pointer-events: none;
-                    user-select: none;
+                    position: absolute; top: 20px; right: 20px;
+                    background: rgba(0,0,0,0.6); color: white;
+                    font-size: 13px; font-weight: 600;
+                    padding: 6px 12px; border-radius: 14px;
+                    z-index: 10002; pointer-events: none; user-select: none;
                 `;
                 counter.textContent = `${index + 1}/${allSlides.length}`;
                 mediaContainer.appendChild(counter);
@@ -506,12 +594,86 @@ function toggleFullscreen(mediaElement) {
 
             mediaContainer.style.opacity = '1';
         }, 150);
-    };
+    }
 
-    // Initial slide
+    function setupPinchZoom(img) {
+        let lastTouchEnd = 0;
+        let pinchState = null;
+        let panState = null;
+
+        img.addEventListener('touchstart', (e) => {
+            const now = Date.now();
+            if (now - lastTouchEnd < 350) {
+                e.preventDefault();
+                if (zoomState.scale > 1) {
+                    resetZoom();
+                } else {
+                    zoomState.scale = 3;
+                    zoomState.x = 0;
+                    zoomState.y = 0;
+                    applyZoom();
+                }
+                return;
+            }
+            lastTouchEnd = now;
+
+            if (e.touches.length === 2) {
+                e.preventDefault();
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                pinchState = {
+                    dist: Math.sqrt(dx * dx + dy * dy),
+                    scale: zoomState.scale,
+                    cx: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+                    cy: (e.touches[0].clientY + e.touches[1].clientY) / 2
+                };
+            } else if (e.touches.length === 1 && zoomState.scale > 1) {
+                e.preventDefault();
+                panState = {
+                    x: e.touches[0].clientX - zoomState.x,
+                    y: e.touches[0].clientY - zoomState.y
+                };
+            }
+        }, { passive: false });
+
+        img.addEventListener('touchmove', (e) => {
+            if (pinchState && e.touches.length === 2) {
+                e.preventDefault();
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                let newScale = pinchState.scale * (dist / pinchState.dist);
+                newScale = Math.max(1, Math.min(10, newScale));
+                zoomState.scale = newScale;
+                if (newScale <= 1) resetZoom();
+                else applyZoom();
+            } else if (panState && e.touches.length === 1 && zoomState.scale > 1) {
+                e.preventDefault();
+                zoomState.x = e.touches[0].clientX - panState.x;
+                zoomState.y = e.touches[0].clientY - panState.y;
+                applyZoom();
+            }
+        }, { passive: false });
+
+        img.addEventListener('touchend', (e) => {
+            pinchState = null;
+            panState = null;
+        }, { passive: true });
+
+        // Wheel zoom for desktop
+        img.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const delta = e.deltaY > 0 ? 0.9 : 1.1;
+            let newScale = zoomState.scale * delta;
+            newScale = Math.max(1, Math.min(10, newScale));
+            zoomState.scale = newScale;
+            if (newScale <= 1) resetZoom();
+            else applyZoom();
+        }, { passive: false });
+    }
+
     showSlide(currentFullscreenIndex);
 
-    // Navigation: go next
     const goNext = () => {
         if (!hasMultipleSlides || isSingleMedia) return;
         if (currentFullscreenIndex >= allSlides.length - 1) return;
@@ -519,7 +681,6 @@ function toggleFullscreen(mediaElement) {
         showSlide(currentFullscreenIndex);
     };
 
-    // Navigation: go prev
     const goPrev = () => {
         if (!hasMultipleSlides || isSingleMedia) return;
         if (currentFullscreenIndex <= 0) return;
@@ -527,30 +688,23 @@ function toggleFullscreen(mediaElement) {
         showSlide(currentFullscreenIndex);
     };
 
-    // Keyboard navigation
-    let closeFullscreen; // declared here for circular reference
+    let closeFullscreen;
     const handleKey = (e) => {
         if (e.key === 'ArrowRight') goNext();
         else if (e.key === 'ArrowLeft') goPrev();
         else if (e.key === 'Escape') closeFullscreen();
     };
 
-    // Mouse wheel handler (only for carousel)
     let wheelTimeout = null;
     const handleWheel = (e) => {
         if (!hasMultipleSlides || isSingleMedia) return;
         e.preventDefault();
         if (wheelTimeout) return;
         wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 400);
-
-        if (e.deltaY > 0 || e.deltaX > 0) {
-            goNext();
-        } else {
-            goPrev();
-        }
+        if (e.deltaY > 0 || e.deltaX > 0) goNext();
+        else goPrev();
     };
 
-    // Close function (defined after handleKey and handleWheel)
     closeFullscreen = () => {
         const video = fullscreenOverlay?.querySelector('video');
         if (video) video.pause();
@@ -560,38 +714,30 @@ function toggleFullscreen(mediaElement) {
         document.removeEventListener('wheel', handleWheel, { capture: true });
     };
 
-    // Register event listeners
     document.addEventListener('keydown', handleKey);
     if (hasMultipleSlides && !isSingleMedia) {
         document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
     }
 
-    // Touch swipe — full snap replace (carousel only)
     if (hasMultipleSlides && !isSingleMedia) {
-        let touchStartX = 0;
-        let touchStartY = 0;
-        let isSwiping = false;
-
+        let touchStartX = 0, touchStartY = 0, isSwiping = false;
         fullscreenOverlay.addEventListener('touchstart', (e) => {
+            if (e.touches.length > 1) return;
             touchStartX = e.touches[0].clientX;
             touchStartY = e.touches[0].clientY;
             isSwiping = false;
         }, { passive: true });
 
         fullscreenOverlay.addEventListener('touchmove', (e) => {
+            if (e.touches.length > 1) return;
             const diffX = Math.abs(e.touches[0].clientX - touchStartX);
             const diffY = Math.abs(e.touches[0].clientY - touchStartY);
-            
-            if (diffX > diffY && diffX > 30) {
-                isSwiping = true;
-            }
+            if (diffX > diffY && diffX > 30) isSwiping = true;
         }, { passive: true });
 
         fullscreenOverlay.addEventListener('touchend', (e) => {
             if (!isSwiping) return;
-            
             const diffX = e.changedTouches[0].clientX - touchStartX;
-            
             if (Math.abs(diffX) > 60) {
                 if (diffX > 0) goPrev();
                 else goNext();
@@ -603,7 +749,6 @@ function toggleFullscreen(mediaElement) {
     fullscreenOverlay.appendChild(mediaContainer);
     document.body.appendChild(fullscreenOverlay);
 
-    // Tap on background to close
     fullscreenOverlay.addEventListener('click', (e) => {
         if (e.target === fullscreenOverlay || e.target === mediaContainer) {
             closeFullscreen();
@@ -1333,9 +1478,177 @@ let selectedFiles = []; // Array of { file, previewUrl, compressed }
 const IMAGE_RESIZE_CONFIG = {
     maxWidth: 1920,
     maxHeight: 1920,
-    quality: 0.82,          // JPEG качество
+    quality: 0.82,
     outputType: 'image/jpeg'
 };
+
+// Настройки сжатия видео на клиенте
+const VIDEO_COMPRESS_CONFIG = {
+    maxWidth: 854,
+    maxHeight: 480,
+    bitrate: 800000,
+    fps: 24,
+    sizeThreshold: 5 * 1024 * 1024 // 5MB — видео больше этого будут сжаты
+};
+
+/**
+ * Сжимает видео через Canvas + MediaRecorder.
+ * Уменьшает разрешение, битрейт и FPS.
+ * Аудио не сохраняется (типично для коротких видео).
+ * @param {File} file — оригинальный видеофайл
+ * @returns {Promise<Blob>} — сжатый WebM
+ */
+function compressVideo(file) {
+    return new Promise((resolve, reject) => {
+        if (!file.type.startsWith('video/')) return resolve(file);
+
+        // Если видео меньше порога — не сжимаем
+        // if (file.size <= VIDEO_COMPRESS_CONFIG.sizeThreshold) return resolve(file);
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        video.crossOrigin = 'anonymous';
+
+        const url = URL.createObjectURL(file);
+        video.src = url;
+
+        let aborted = false;
+        const timeout = setTimeout(() => {
+            aborted = true;
+            cleanup();
+            reject(new Error('Video compression timeout'));
+        }, 600000); // 10 min max — для больших файлов
+
+        function cleanup() {
+            clearTimeout(timeout);
+            video.removeAttribute('src');
+            video.load();
+            URL.revokeObjectURL(url);
+        }
+
+        video.onloadedmetadata = () => {
+            if (aborted) return;
+
+            // Расчет новых размеров
+            let width = video.videoWidth;
+            let height = video.videoHeight;
+            const maxW = VIDEO_COMPRESS_CONFIG.maxWidth;
+            const maxH = VIDEO_COMPRESS_CONFIG.maxHeight;
+
+            if (width > maxW || height > maxH) {
+                const ratio = Math.min(maxW / width, maxH / height);
+                width = Math.round(width * ratio);
+                height = Math.round(height * ratio);
+            }
+
+            // Убедимся что чётные (требование для видео)
+            if (width % 2 !== 0) width++;
+            if (height % 2 !== 0) height++;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+
+            const fps = VIDEO_COMPRESS_CONFIG.fps;
+            let mediaRecorder = null;
+            let recordedChunks = [];
+
+            try {
+                const stream = canvas.captureStream(fps);
+                const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+                    ? 'video/webm;codecs=vp9'
+                    : 'video/webm';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    cleanup();
+                    return resolve(file);
+                }
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType,
+                    videoBitsPerSecond: VIDEO_COMPRESS_CONFIG.bitrate
+                });
+            } catch (e) {
+                cleanup();
+                return resolve(file);
+            }
+
+            mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) recordedChunks.push(e.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                cleanup();
+                const blob = new Blob(recordedChunks, { type: 'video/webm' });
+                if (blob.size > 0) {
+                    resolve(blob);
+                } else {
+                    reject(new Error('Compressed video is empty'));
+                }
+            };
+
+            mediaRecorder.onerror = () => {
+                cleanup();
+                reject(new Error('MediaRecorder error during compression'));
+            };
+
+            mediaRecorder.start(1000 / fps);
+
+            video.play().catch(() => {
+                mediaRecorder.stop();
+                cleanup();
+                reject(new Error('Video playback failed'));
+            });
+
+            let lastTime = 0;
+
+            function drawFrame() {
+                if (aborted || video.ended || video.paused) {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                    return;
+                }
+
+                // Пропускаем кадры для соблюдения целевого FPS
+                const elapsed = video.currentTime - lastTime;
+                if (elapsed >= 1 / fps) {
+                    ctx.drawImage(video, 0, 0, width, height);
+                    lastTime = video.currentTime;
+                }
+
+                requestAnimationFrame(drawFrame);
+            }
+
+            video.onended = () => {
+                if (mediaRecorder && mediaRecorder.state === 'recording') {
+                    // Дорисовываем последний кадр
+                    ctx.drawImage(video, 0, 0, width, height);
+                    setTimeout(() => {
+                        if (mediaRecorder && mediaRecorder.state === 'recording') {
+                            mediaRecorder.stop();
+                        }
+                    }, 200);
+                }
+            };
+
+            video.onerror = () => {
+                cleanup();
+                reject(new Error('Failed to load video for compression'));
+            };
+
+            drawFrame();
+        };
+
+        video.onerror = () => {
+            cleanup();
+            resolve(file);
+        };
+    });
+}
 
 /**
  * Сжимает изображение через Canvas.
@@ -1344,7 +1657,6 @@ const IMAGE_RESIZE_CONFIG = {
  */
 function resizeImage(file) {
     return new Promise((resolve, reject) => {
-        // Видео не сжимаем
         if (file.type.startsWith('video/')) return resolve(file);
 
         const reader = new FileReader();
@@ -1388,17 +1700,37 @@ function resizeImage(file) {
 }
 
 uploadBtn?.addEventListener('click', () => {
+    uploadModal.dataset.mode = 'media';
+    document.getElementById('uploadArea').style.display = 'block';
+    document.querySelector('.file-counter').style.display = 'flex';
+    document.querySelector('.upload-footer .visibility-toggle').style.display = 'flex';
+    document.querySelector('.modal-header h2').textContent = 'Create New Post';
     uploadModal.style.display = 'flex';
     resetUploadForm();
 });
 
+const textPostBtn = document.getElementById('textPostBtn');
+textPostBtn?.addEventListener('click', () => {
+    uploadModal.dataset.mode = 'text';
+    document.getElementById('uploadArea').style.display = 'none';
+    document.querySelector('.file-counter').style.display = 'none';
+    document.querySelector('.upload-footer .visibility-toggle').style.display = 'flex';
+    document.querySelector('.modal-header h2').textContent = '✍️ New Text Post';
+    uploadModal.style.display = 'flex';
+    resetUploadForm();
+    captionInput.focus();
+    uploadSubmit.disabled = true;
+});
+
 closeUpload?.addEventListener('click', () => {
     uploadModal.style.display = 'none';
+    document.querySelector('.modal-header h2').textContent = 'Create New Post';
 });
 
 uploadModal?.addEventListener('click', (e) => {
     if (e.target === uploadModal) {
         uploadModal.style.display = 'none';
+        document.querySelector('.modal-header h2').textContent = 'Create New Post';
     }
 });
 
@@ -1447,7 +1779,6 @@ async function handleFilesSelectAsync(files) {
     uploadError.style.display = 'none';
 
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
-    const maxSize = 10485760; // 10MB
 
     for (const file of files) {
         if (selectedFiles.length >= MAX_FILES) {
@@ -1458,12 +1789,6 @@ async function handleFilesSelectAsync(files) {
 
         if (!allowedTypes.includes(file.type)) {
             uploadError.textContent = `Invalid file type: ${file.name}. Please upload JPEG, PNG, WebP, GIF, MP4, or WebM.`;
-            uploadError.style.display = 'block';
-            continue;
-        }
-
-        if (file.size > maxSize) {
-            uploadError.textContent = `File too large: ${file.name}. Maximum size is 10MB.`;
             uploadError.style.display = 'block';
             continue;
         }
@@ -1553,6 +1878,10 @@ function updateWarning() {
 
 captionInput?.addEventListener('input', () => {
     charCount.textContent = captionInput.value.length;
+    const hasText = captionInput.value.trim().length > 0;
+    if (selectedFiles.length === 0) {
+        uploadSubmit.disabled = !hasText;
+    }
 });
 
 function resetUploadForm() {
@@ -1580,7 +1909,11 @@ function resetUploadForm() {
 }
 
 uploadSubmit?.addEventListener('click', async () => {
-    if (selectedFiles.length === 0) return;
+    if (selectedFiles.length === 0 && !captionInput.value.trim()) {
+        uploadError.textContent = 'Add a caption or select media to create a post.';
+        uploadError.style.display = 'block';
+        return;
+    }
 
     uploadSubmit.disabled = true;
     uploadSubmit.style.display = 'none';
@@ -1593,6 +1926,8 @@ uploadSubmit?.addEventListener('click', async () => {
         if (captionInput.value.trim()) {
             formData.append('description', captionInput.value.trim());
         }
+        const isPublicCheckbox = document.getElementById('isPublicToggle');
+        formData.append('is_public', isPublicCheckbox ? isPublicCheckbox.checked : true);
         if (uploadTags.length > 0) {
             formData.append('tags', JSON.stringify(uploadTags));
         }
@@ -1613,8 +1948,11 @@ uploadSubmit?.addEventListener('click', async () => {
                 const fileName = `upload_${Date.now()}_${processedFiles}.jpg`;
                 formData.append('media', compressed, fileName);
             } else {
-                // Video — send as-is
-                formData.append('media', item.file, item.file.name);
+                progressText.textContent = `Compressing video ${processedFiles}/${totalFiles}…`;
+                const compressed = await compressVideo(item.file);
+                const ext = compressed === item.file ? item.file.name.split('.').pop() : 'webm';
+                const fileName = `upload_${Date.now()}_${processedFiles}.${ext}`;
+                formData.append('media', compressed, fileName);
             }
         }
 
@@ -1647,7 +1985,7 @@ uploadSubmit?.addEventListener('click', async () => {
             uploadProgress.style.display = 'none';
         }
     } catch (e) {
-        uploadError.textContent = 'Network error. Please try again.';
+        uploadError.textContent = e.message || 'Network error. Please try again.';
         uploadError.style.display = 'block';
         uploadSubmit.style.display = 'block';
         uploadSubmit.disabled = false;
@@ -1764,10 +2102,6 @@ document.getElementById('forgotBtn')?.addEventListener('click', async () => {
 
         if (res.ok) {
             successEl.textContent = data.message || 'Reset link sent! Check your email.';
-            if (data.resetUrl) {
-                // Email not configured — show link directly
-                successEl.innerHTML = `${data.message}<br><a href="${data.resetUrl}">${data.resetUrl}</a>`;
-            }
             successEl.style.display = 'block';
         } else {
             errorEl.textContent = data.error || 'Failed to send reset link';
@@ -1858,6 +2192,47 @@ function checkResetTokenInUrl() {
 // Initialize
 checkResetTokenInUrl();
 checkAuth();
+
+// === Single post view via /post/:id ===
+function getPostIdFromUrl() {
+    const match = window.location.pathname.match(/^\/post\/(\d+)$/);
+    return match ? parseInt(match[1], 10) : null;
+}
+
+const sharedPostId = getPostIdFromUrl();
+if (sharedPostId) {
+    // Override loadFeed to load single post instead
+    const origLoadFeed = loadFeed;
+    loadFeed = async function() {
+        const feed = document.getElementById('feed');
+        const filters = document.getElementById('feedFilters');
+        if (filters) filters.style.display = 'none';
+
+        feed.innerHTML = '<div class="loading"><div class="loading-spinner"></div><p>Loading...</p></div>';
+
+        try {
+            const res = await apiFetch(`/api/posts/${sharedPostId}`);
+            if (!res.ok) {
+                feed.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🔗</div>
+                        <h3>Post not found</h3>
+                        <p>This post may have been deleted or is private.</p>
+                        <button class="btn btn-primary" onclick="window.location.href='/'">Go to feed</button>
+                    </div>`;
+                return;
+            }
+            const post = await res.json();
+            currentFeed = [post];
+            renderFeed();
+            document.title = post.description
+                ? `${post.description.slice(0, 50)} — Cosmogram`
+                : 'Cosmogram';
+        } catch (e) {
+            feed.innerHTML = `<div class="empty-state"><h3>Failed to load post</h3></div>`;
+        }
+    };
+}
 
 // === Tag Input Handler ===
 const tagInput = document.getElementById('tagInput');
@@ -1975,6 +2350,10 @@ checkAuth = async function() {
 
 // === Admin Panel ===
 let adminModal = null;
+let currentPreviewFiles = [];
+let adminSelectedFiles = [];
+let currentPreviewFolder = null;
+const MAX_FILES_PER_POST = 20;
 
 function openAdminPanel() {
     if (!adminModal) adminModal = document.getElementById('adminModal');
@@ -1989,6 +2368,7 @@ function closeAdminPanel() {
     if (adminModal) {
         adminModal.style.display = 'none';
         clearAdminMessages();
+        closePreview();
     }
 }
 
@@ -2024,6 +2404,27 @@ async function loadAdminData() {
     ]);
 }
 
+// Tab switching
+function switchAdminTab(tabName) {
+    document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.admin-tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.admin-tab[data-tab="${tabName}"]`)?.classList.add('active');
+    document.getElementById(`tab-${tabName}`)?.classList.add('active');
+}
+
+// Folder search
+function initFolderSearch() {
+    const searchInput = document.getElementById('folderSearch');
+    if (!searchInput) return;
+    searchInput.addEventListener('input', () => {
+        const query = searchInput.value.toLowerCase();
+        document.querySelectorAll('.folder-item').forEach(item => {
+            const name = item.querySelector('.folder-name')?.textContent?.toLowerCase() || '';
+            item.classList.toggle('hidden', !name.includes(query));
+        });
+    });
+}
+
 async function loadFolders() {
     try {
         const response = await apiFetch('/api/admin/media/sources');
@@ -2037,7 +2438,6 @@ async function loadFolders() {
             return;
         }
         
-        // Create map of imported folders
         const importedMap = new Map();
         if (data.importedFolders) {
             data.importedFolders.forEach(f => {
@@ -2069,13 +2469,14 @@ async function loadFolders() {
             `;
         }).join('');
         
-        // Add click handler to preview
         document.querySelectorAll('.folder-item').forEach(item => {
             item.addEventListener('click', () => {
                 const folder = item.dataset.folder;
                 previewFolder(folder);
             });
         });
+        
+        initFolderSearch();
     } catch (error) {
         console.error('Error loading folders:', error);
         showAdminError('Failed to load folders: ' + error.message);
@@ -2138,11 +2539,13 @@ async function loadQueueStatus() {
     }
 }
 
-// Preview and select photos (admin import)
-let currentPreviewFiles = [];
-let adminSelectedFiles = []; // Files selected for admin import
-let currentPreviewFolder = null;
-const MAX_FILES_PER_POST = 20;
+function closePreview() {
+    const previewSection = document.getElementById('previewSection');
+    if (previewSection) previewSection.style.display = 'none';
+    currentPreviewFiles = [];
+    adminSelectedFiles = [];
+    currentPreviewFolder = null;
+}
 
 async function previewFolder(folderPath) {
     currentPreviewFolder = folderPath;
@@ -2155,7 +2558,6 @@ async function previewFolder(folderPath) {
 
     if (!previewSection || !adminPreviewGrid) return;
 
-    // Show preview section
     previewSection.style.display = 'block';
     previewFolderName.textContent = folderPath;
     adminPreviewGrid.innerHTML = '<div class="loading">Loading preview...</div>';
@@ -2183,7 +2585,7 @@ async function previewFolder(folderPath) {
     } catch (error) {
         console.error('Error previewing folder:', error);
         showAdminError('Preview failed: ' + error.message);
-        previewGrid.innerHTML = '<div class="loading">Error loading preview</div>';
+        adminPreviewGrid.innerHTML = '<div class="loading">Error loading preview</div>';
     }
 }
 
@@ -2230,10 +2632,8 @@ function toggleSelectFile(index) {
     const existingIndex = adminSelectedFiles.findIndex(f => f.relativePath === file.relativePath);
     
     if (existingIndex >= 0) {
-        // Deselect
         adminSelectedFiles.splice(existingIndex, 1);
     } else {
-        // Select (check limit)
         if (adminSelectedFiles.length >= MAX_FILES_PER_POST) {
             showAdminError(`Maximum ${MAX_FILES_PER_POST} files per post`);
             return;
@@ -2283,18 +2683,13 @@ async function importSelectedFolder() {
     
     clearAdminMessages();
     
-    // Prepare files for API - add relativePath
     const filesForImport = adminSelectedFiles.map(file => {
-        // Extract relative path from sourcePath
         const sourceDir = '/opt/media/files/';
         let relativePath = file.sourcePath;
         if (relativePath.startsWith(sourceDir)) {
             relativePath = relativePath.substring(sourceDir.length);
         }
-        return {
-            ...file,
-            relativePath
-        };
+        return { ...file, relativePath };
     });
     
     try {
@@ -2319,9 +2714,8 @@ async function importSelectedFolder() {
             console.warn('Import warnings:', data.errors);
         }
         
-        // Clear selection and hide preview
         adminSelectedFiles = [];
-        document.getElementById('previewSection').style.display = 'none';
+        closePreview();
         
         await Promise.all([
             loadQueueStatus(),
@@ -2333,9 +2727,7 @@ async function importSelectedFolder() {
     }
 }
 
-// Select All / Deselect All
 function selectAllFiles() {
-    // Select up to MAX_FILES_PER_POST
     adminSelectedFiles = currentPreviewFiles.slice(0, MAX_FILES_PER_POST);
     renderAdminPreviewGrid();
 }
@@ -2446,12 +2838,33 @@ async function clearQueue() {
 // Admin panel event listeners
 document.getElementById('adminBtn')?.addEventListener('click', openAdminPanel);
 document.getElementById('closeAdmin')?.addEventListener('click', closeAdminPanel);
-document.getElementById('refreshFoldersBtn')?.addEventListener('click', loadFolders);
+
+// Tab switching
+document.querySelectorAll('.admin-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        switchAdminTab(tab.dataset.tab);
+    });
+});
+
+// Preview close
+document.getElementById('closePreview')?.addEventListener('click', closePreview);
+
+// Refresh buttons
+document.getElementById('refreshFoldersBtn')?.addEventListener('click', () => {
+    loadFolders();
+    const search = document.getElementById('folderSearch');
+    if (search) search.value = '';
+});
+
 document.getElementById('refreshQueueBtn')?.addEventListener('click', loadQueueStatus);
-document.getElementById('clearQueueBtn')?.addEventListener('click', clearQueue);
+
+// Selection buttons
 document.getElementById('selectAllBtn')?.addEventListener('click', selectAllFiles);
 document.getElementById('deselectAllBtn')?.addEventListener('click', deselectAllFiles);
 document.getElementById('importSelectedBtn')?.addEventListener('click', importSelectedFolder);
+
+// Clear queue handler for the action card button (if it's in the actions tab)
+// The clearQueueBtn handler still works via onclick in the action card
 
 // Close admin modal on escape
 document.addEventListener('keydown', (e) => {

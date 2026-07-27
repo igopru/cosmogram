@@ -6,10 +6,14 @@ import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { fileTypeFromBuffer } from 'file-type';
+import { execSync } from 'child_process';
 import { getDB } from '../models/database.js';
-import { validatePost } from '../middleware/validation.js';
+import { validatePost, validateNumericParam } from '../middleware/validation.js';
 import { checkPostOwner, validateSession } from '../middleware/auth.js';
+import { optionalAuth } from '../middleware/optionalAuth.js';
 import { sanitizeInput, logSecurityEvent } from '../middleware/security.js';
+
+const MIN_VIDEO_DURATION = parseFloat(process.env.MIN_VIDEO_DURATION) || 1.0; // seconds
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,43 +36,62 @@ uploadDirs.forEach(dir => {
 // Use memory storage — files buffered in memory for magic byte validation BEFORE disk write
 const memoryStorage = multer.memoryStorage();
 
+const MAX_FILE_SIZE = parseInt(process.env.MAX_FILE_SIZE) || 10485760;
+const MAX_VIDEO_SIZE = parseInt(process.env.MAX_VIDEO_SIZE) || 52428800; // 50MB for videos
+
 const upload = multer({
     storage: memoryStorage,
     limits: {
-        fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10485760,
-        files: 10  // Max 10 files per post
+        fileSize: MAX_VIDEO_SIZE,  // Use larger limit (videos are compressed client-side)
+        files: 20
     },
     fileFilter: (req, file, cb) => {
-        // Basic MIME type check from header (verified later by magic bytes)
-        const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
-        if (!allowedTypes.includes(file.mimetype)) {
+        // Coarse pre-filter — strict validation is done by magic bytes in validateAndSaveFile
+        // Some mobile WebViews send empty MIME type — accept through, magic bytes will catch bad files
+        const mime = file.mimetype.toLowerCase();
+        const knownImageVideo = /^(image|video)\//;
+        if (mime && !knownImageVideo.test(mime) && mime !== 'application/octet-stream') {
             logSecurityEvent(req, 'upload_rejected_mime', { filename: file.originalname, type: file.mimetype });
             return cb(new Error('Invalid file type'), false);
         }
 
-        // Verify extension matches claimed MIME type
-        const ext = path.extname(file.originalname).toLowerCase();
-        const validExtensions = {
-            'image/jpeg': ['.jpg', '.jpeg'],
-            'image/png': ['.png'],
-            'image/webp': ['.webp'],
-            'image/gif': ['.gif'],
-            'video/mp4': ['.mp4'],
-            'video/webm': ['.webm']
-        };
-
-        if (!validExtensions[file.mimetype]?.includes(ext)) {
-            logSecurityEvent(req, 'upload_rejected_ext_mismatch', {
-                filename: file.originalname,
-                mime: file.mimetype,
-                ext
-            });
-            return cb(new Error('File extension does not match MIME type'), false);
+        // Extension check for known MIME types (skip when unknown — magic bytes will validate)
+        if (knownImageVideo.test(mime)) {
+            const ext = path.extname(file.originalname).toLowerCase();
+            const validExtensions = {
+                'image/jpeg': ['.jpg', '.jpeg'],
+                'image/png': ['.png'],
+                'image/webp': ['.webp'],
+                'image/gif': ['.gif'],
+                'video/mp4': ['.mp4'],
+                'video/webm': ['.webm']
+            };
+            if (validExtensions[mime] && !validExtensions[mime].includes(ext)) {
+                logSecurityEvent(req, 'upload_rejected_ext_mismatch', {
+                    filename: file.originalname,
+                    mime: file.mimetype,
+                    ext
+                });
+                return cb(new Error('File extension does not match MIME type'), false);
+            }
         }
 
         cb(null, true);
     }
 });
+
+function getVideoDuration(filePath) {
+    try {
+        const result = execSync(
+            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+            { timeout: 10000, maxBuffer: 1024 }
+        ).toString().trim();
+        const duration = parseFloat(result);
+        return isNaN(duration) ? null : duration;
+    } catch {
+        return null;
+    }
+}
 
 // Magic byte validation + save to disk
 // This function runs AFTER multer buffers the file but BEFORE it's written to disk
@@ -86,11 +109,15 @@ async function validateAndSaveFile(buffer, originalName, claimedMime) {
         'image/webp': { ext: '.webp', dir: 'images' },
         'image/gif': { ext: '.gif', dir: 'images' },
         'video/mp4': { ext: '.mp4', dir: 'videos' },
-        'video/webm': { ext: '.webm', dir: 'videos' }
+        'video/webm': { ext: '.webm', dir: 'videos' },
+        'video/3gpp': { ext: '.mp4', dir: 'videos' },
+        'video/3gpp2': { ext: '.mp4', dir: 'videos' },
+        'video/quicktime': { ext: '.mp4', dir: 'videos' }
     };
 
     const config = allowedMimes[fileType.mime];
     if (!config) {
+        console.error('validateAndSaveFile: unknown mime', { detected: fileType.mime, ext: fileType.ext, claimed: claimedMime });
         throw { status: 400, message: `File type '${fileType.mime}' is not allowed (claimed: ${claimedMime})` };
     }
 
@@ -110,6 +137,18 @@ async function validateAndSaveFile(buffer, originalName, claimedMime) {
     // Write to disk
     await fs.promises.writeFile(filePath, buffer);
 
+    // Validate video minimum duration
+    if (config.dir === 'videos') {
+        const duration = getVideoDuration(filePath);
+        if (duration !== null && duration < MIN_VIDEO_DURATION) {
+            await fs.promises.unlink(filePath).catch(() => {});
+            throw {
+                status: 400,
+                message: `Video is too short (${duration.toFixed(2)}s). Minimum duration is ${MIN_VIDEO_DURATION}s.`
+            };
+        }
+    }
+
     return {
         path: filePath,
         mediaType: config.dir === 'videos' ? 'video' : 'image',
@@ -120,12 +159,21 @@ async function validateAndSaveFile(buffer, originalName, claimedMime) {
 router.get('/feed', (req, res) => {
     try {
         const filter = req.query.filter || 'all';
+        const userId = req.userId;
+        const isAuth = userId !== null && userId !== undefined;
+
+        // For unauthenticated users, only show public posts
+        // For authenticated users, show all posts
+        const publicFilter = isAuth ? '1=1' : 'p.is_public = 1';
+
         let query, params;
 
         if (filter === 'subscribed') {
-            // Posts from subscribed users first, then others
+            if (!isAuth) {
+                return res.json({ posts: [], filter });
+            }
             query = `
-                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at,
+                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at, p.is_public,
                        u.username, u.avatar, u.fullname,
                        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count,
                        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comments_count,
@@ -134,6 +182,7 @@ router.get('/feed', (req, res) => {
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 WHERE u.active = 1
+                  AND ${publicFilter}
                   AND EXISTS(
                       SELECT 1 FROM subscriptions s 
                       WHERE s.follower_id = ? AND s.following_user_id = p.user_id
@@ -141,41 +190,42 @@ router.get('/feed', (req, res) => {
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = [req.userId, req.userId, req.userId];
+            params = [userId, userId, userId];
         } else if (filter.startsWith('tag:')) {
             const tagName = filter.substring(4);
             query = `
-                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at,
+                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at, p.is_public,
                        u.username, u.avatar, u.fullname,
                        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count,
                        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comments_count,
-                       EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as user_liked,
-                       EXISTS(SELECT 1 FROM subscriptions WHERE follower_id = ? AND following_user_id = p.user_id) as is_subscribed
+                       ${isAuth ? "EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?)" : "0"} as user_liked,
+                       ${isAuth ? "EXISTS(SELECT 1 FROM subscriptions WHERE follower_id = ? AND following_user_id = p.user_id)" : "0"} as is_subscribed
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 JOIN post_tags pt ON p.id = pt.post_id
                 JOIN tags t ON pt.tag_id = t.id
                 WHERE u.active = 1 AND t.name = ?
+                  AND ${publicFilter}
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = [req.userId, req.userId, tagName];
+            params = isAuth ? [userId, userId, tagName] : [tagName];
         } else {
-            // All posts
             query = `
-                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at,
+                SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at, p.is_public,
                        u.username, u.avatar, u.fullname,
                        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count,
                        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comments_count,
-                       EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as user_liked,
-                       EXISTS(SELECT 1 FROM subscriptions WHERE follower_id = ? AND following_user_id = p.user_id) as is_subscribed
+                       ${isAuth ? "EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?)" : "0"} as user_liked,
+                       ${isAuth ? "EXISTS(SELECT 1 FROM subscriptions WHERE follower_id = ? AND following_user_id = p.user_id)" : "0"} as is_subscribed
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 WHERE u.active = 1
+                  AND ${publicFilter}
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = [req.userId, req.userId];
+            params = isAuth ? [userId, userId] : [];
         }
 
         const posts = db.prepare(query).all(...params);
@@ -248,15 +298,85 @@ router.get('/feed', (req, res) => {
     }
 });
 
-router.post('/', validateSession, upload.array('media', 20), validatePost, async (req, res) => {
+// GET single post by ID — для шаринга ссылок
+router.get('/:id', optionalAuth, validateNumericParam('id'), (req, res) => {
     try {
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ error: 'Media required' });
+        const userId = req.userId;
+        const isAuth = userId !== null && userId !== undefined;
+
+        const post = db.prepare(`
+            SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at, p.is_public,
+                   u.username, u.avatar, u.fullname,
+                   (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) as likes_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) as comments_count,
+                   ${isAuth ? "EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?)" : "0"} as user_liked,
+                   ${isAuth ? "EXISTS(SELECT 1 FROM subscriptions WHERE follower_id = ? AND following_user_id = p.user_id)" : "0"} as is_subscribed
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.id = ? AND u.active = 1
+        `).get(...(isAuth ? [userId, userId, req.params.id] : [req.params.id]));
+
+        if (!post) {
+            return res.status(404).json({ error: 'Post not found' });
         }
 
+        if (!isAuth && !post.is_public) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        const baseUrl = `//${req.hostname}`;
+
+        const mediaItems = db.prepare(`
+            SELECT id, media_type, media_path, thumbnail_path, sort_order
+            FROM post_media
+            WHERE post_id = ?
+            ORDER BY sort_order ASC
+        `).all(post.id).map(m => ({
+            ...m,
+            media_url: `${baseUrl}/uploads/${m.media_type === 'video' ? 'videos' : 'images'}/${path.basename(m.media_path)}`,
+            thumbnail_url: m.thumbnail_path ? `${baseUrl}/uploads/thumbnails/${path.basename(m.thumbnail_path)}` : null
+        }));
+
+        const tags = db.prepare(`
+            SELECT t.id, t.name
+            FROM tags t
+            JOIN post_tags pt ON t.id = pt.tag_id
+            WHERE pt.post_id = ?
+        `).all(post.id);
+
+        const comments = db.prepare(`
+            SELECT c.id, c.user_id, c.text, c.created_at, u.username, u.avatar
+            FROM comments c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.post_id = ?
+            ORDER BY c.created_at DESC
+            LIMIT 100
+        `).all(post.id).map(c => ({
+            ...c,
+            text: sanitizeInput(c.text)
+        }));
+
+        res.json({
+            ...post,
+            description: sanitizeInput(post.description),
+            media: mediaItems,
+            media_type: mediaItems[0]?.media_type || null,
+            tags,
+            comments
+        });
+    } catch (error) {
+        console.error('Single post error:', error);
+        res.status(500).json({ error: 'Failed to load post' });
+    }
+});
+
+router.post('/', validateSession, upload.array('media', 20), validatePost, async (req, res) => {
+    try {
+        const isPublic = req.body.is_public !== undefined ? (req.body.is_public === true || req.body.is_public === 'true' ? 1 : 0) : 1;
+
         const insertPost = db.prepare(`
-            INSERT INTO posts (user_id, description, allow_comments)
-            VALUES (?, ?, ?)
+            INSERT INTO posts (user_id, description, allow_comments, is_public)
+            VALUES (?, ?, ?, ?)
         `);
 
         const insertMedia = db.prepare(`
@@ -268,7 +388,8 @@ router.post('/', validateSession, upload.array('media', 20), validatePost, async
         const result = insertPost.run(
             req.userId,
             sanitizeInput(req.body.description),
-            1
+            1,
+            isPublic
         );
 
         const postId = result.lastInsertRowid;

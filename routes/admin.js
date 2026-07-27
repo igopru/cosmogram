@@ -25,7 +25,21 @@ const MEDIA_CONFIG = {
     videoDir: path.join(__dirname, '../uploads/videos'),
     previewWidth: 400,            // width for preview thumbnails
     previewQuality: 75,
+    minVideoDuration: parseFloat(process.env.MIN_VIDEO_DURATION) || 1.0, // seconds
 };
+
+function getVideoDuration(filePath) {
+    try {
+        const result = execSync(
+            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${filePath}"`,
+            { timeout: 10000, maxBuffer: 1024 }
+        ).toString().trim();
+        const duration = parseFloat(result);
+        return isNaN(duration) ? null : duration;
+    } catch {
+        return null;
+    }
+}
 
 function getMediaType(filename) {
     const ext = path.extname(filename).toLowerCase();
@@ -478,8 +492,8 @@ router.post('/media/import-selected', requireAdmin, async (req, res) => {
         fs.mkdirSync(MEDIA_CONFIG.thumbnailDir, { recursive: true });
 
         const insertPost = db.prepare(`
-            INSERT INTO posts (user_id, description, allow_comments, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO posts (user_id, description, allow_comments, created_at, is_public)
+            VALUES (?, ?, ?, ?, ?)
         `);
         const insertMedia = db.prepare(`
             INSERT INTO post_media (post_id, media_type, media_path, thumbnail_path, sort_order)
@@ -504,7 +518,7 @@ router.post('/media/import-selected', requireAdmin, async (req, res) => {
         }
 
         try {
-            const postResult = insertPost.run(user.id, postDescription, 1, postCreatedAt);
+            const postResult = insertPost.run(user.id, postDescription, 1, postCreatedAt, 1);
             const postId = postResult.lastInsertRowid;
 
             let successCount = 0;
@@ -540,7 +554,12 @@ router.post('/media/import-selected', requireAdmin, async (req, res) => {
                             }
                         }
                     } else {
-                        // For videos — create symlink to original
+                        // For videos — check duration then create symlink
+                        const duration = getVideoDuration(sourcePath);
+                        if (duration !== null && duration < MEDIA_CONFIG.minVideoDuration) {
+                            errors.push(`${file.filename}: Video too short (${duration.toFixed(2)}s, min ${MEDIA_CONFIG.minVideoDuration}s)`);
+                            continue;
+                        }
                         const destName = `${uuidv4()}${ext}`;
                         destPath = path.join(MEDIA_CONFIG.videoDir, destName);
                         fs.symlinkSync(sourcePath, destPath);
@@ -596,8 +615,8 @@ router.post('/media/import', requireAdmin, (req, res) => {
         fs.mkdirSync(MEDIA_CONFIG.thumbnailDir, { recursive: true });
         
         const insertPost = db.prepare(`
-            INSERT INTO posts (user_id, description, allow_comments, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO posts (user_id, description, allow_comments, created_at, is_public)
+            VALUES (?, ?, ?, ?, ?)
         `);
         const insertMedia = db.prepare(`
             INSERT INTO post_media (post_id, media_type, media_path, thumbnail_path, sort_order)
@@ -665,7 +684,7 @@ router.post('/media/import', requireAdmin, (req, res) => {
             const createdAt = firstDate.toISOString();
             
             try {
-                const postResult = insertPost.run(user.id, description, 1, createdAt);
+                const postResult = insertPost.run(user.id, description, 1, createdAt, 1);
                 const postId = postResult.lastInsertRowid;
                 
                 for (let i = 0; i < group.length; i++) {
@@ -690,7 +709,12 @@ router.post('/media/import', requireAdmin, (req, res) => {
                                 continue;
                             }
                         } else {
-                            // For videos — create symlink to original
+                            // For videos — check duration then create symlink
+                            const duration = getVideoDuration(item.source_path);
+                            if (duration !== null && duration < MEDIA_CONFIG.minVideoDuration) {
+                                markError.run(`Video too short (${duration.toFixed(2)}s)`, item.id);
+                                continue;
+                            }
                             const destName = `${uuidv4()}${ext}`;
                             destPath = path.join(MEDIA_CONFIG.videoDir, destName);
                             fs.symlinkSync(item.source_path, destPath);

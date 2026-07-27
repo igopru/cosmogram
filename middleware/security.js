@@ -50,10 +50,7 @@ export function preventXSS(req, res, next) {
 
 export function sanitizeInput(str) {
     if (!str) return '';
-    return str
-        .replace(/[<>"'&]/g, '')  // Strip dangerous chars including quotes
-        .trim()
-        .slice(0, 500);
+    return String(str).trim().slice(0, 2200);
 }
 
 // HTML-encode for safe output in HTML context

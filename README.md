@@ -21,19 +21,28 @@ Cosmogram is a self-hosted media gallery server for personal and team use. Uploa
 - **Input sanitization** — all user input validated and filtered
 
 ### 🖼️ Media Management
-- **Photo & Video uploads** — JPEG, PNG, WebP, GIF, MP4, WebM, MOV, AVI
-- **Carousel view** — multi-media posts with smooth navigation
-- **Fullscreen mode** — immersive viewing experience with keyboard/swipe support
+- **Photo & Video uploads** — JPEG, PNG, WebP, GIF, MP4, WebM, 3GPP, QuickTime/MOV
+- **Client-side video compression** — auto-compress to WebM (854×480, 800 kbps); falls back to original if browser can't decode blob URL
+- **Text-only posts** — publish without media via ✍️ button; text renders as styled card
+- **Carousel view** — multi-media posts with smooth navigation, touch swipe support
+- **Fullscreen mode** — immersive viewing with pinch-to-zoom, pan, double-tap reset, scroll-wheel zoom
 - **High-quality thumbnails** — Sharp library generates WebP previews from originals
 - **Scroll-based video** — auto-pause when off-screen
 
 ### 👑 Admin Panel
-- **Web-based interface** — no CLI needed, full control from browser
-- **Folder browser** — see all source media folders at a glance
-- **Preview gallery** — view ALL files before importing
-- **Selective import** — choose exactly which photos/videos to include (up to 20 per post)
-- **Import queue management** — monitor and control pending imports
-- **Content moderation** — delete any post or individual media from any user
+- **Full-screen web interface** — удобная панель на весь экран с вкладками
+- **Folder browser** — просмотр всех папок с поиском, сканирование, превью файлов
+- **Import queue** — мониторинг и управление очередью импорта
+- **Action cards** — быстрые действия (очистка очереди, создание тестового поста)
+- **Inline preview** — предпросмотр файлов перед импортом прямо в панели
+- **Content moderation** — удаление любых постов и отдельных медиа
+
+### 🌍 Public Access
+- **Public gallery** — unauthenticated users can browse public posts
+- **Public/private toggle** — per-post visibility control in upload modal
+- **Smart feed** — public posts for guests, all posts for authenticated users
+- **Login/register banner** — shown to guests with contextual CTA
+- **Shareable post links** — `GET /post/:id` for individual posts (respects privacy)
 
 ### 🗑️ Granular Control
 - **Delete individual media** — remove specific photos/videos from posts
@@ -50,7 +59,15 @@ Cosmogram is a self-hosted media gallery server for personal and team use. Uploa
 ### 📱 Responsive Design
 - **Desktop & Mobile** — optimized for all screen sizes
 - **Dark/Light theme** — toggle with one click
-- **Touch-friendly** — swipe gestures, tap-to-fullscreen
+- **Touch-friendly** — swipe gestures, tap-to-fullscreen, pinch-to-zoom
+- **Public gallery mode** — unauthenticated users can browse public posts
+
+### 🤖 Android App
+- **Two variants** — `android/` (fixed URL) and `android_all/` (configurable URL dialog)
+- **File picker** — `ACTION_OPEN_DOCUMENT` for gallery, `ACTION_IMAGE_CAPTURE` for camera
+- **Camera support** — FileProvider for captured photos/videos
+- **Pull-to-refresh** — only when WebView `scrollY == 0`
+- **Permissions** — CAMERA, READ_MEDIA_IMAGES, READ_MEDIA_VIDEO
 
 ### ⚡ Performance
 - **SQLite with WAL** — fast, reliable, zero-config database
@@ -113,6 +130,7 @@ cosmogram/
 │   └── script.js            # Frontend JavaScript
 ├── middleware/
 │   ├── auth.js              # JWT validation, role checks
+│   ├── optionalAuth.js      # Non-blocking auth for public endpoints
 │   ├── validation.js        # Input validation
 │   ├── security.js          # XSS, headers, sanitization
 │   └── logger.js            # Winston logger config
@@ -123,10 +141,17 @@ cosmogram/
 │   ├── manage-users.js           # User management CLI
 │   ├── system-monitor.sh         # System monitoring script
 │   └── diagnose.sh               # Diagnostic script
+├── android/                  # WebView app (fixed URL)
+├── android_all/              # WebView app (configurable URL)
 ├── docs/
 │   ├── ADMIN_PANEL.md            # Admin panel guide
+│   ├── ADMIN_PASSWORD.md         # Password reset guide
+│   ├── ANDROID.md                # Android app build guide
 │   ├── PREVIEW_AND_THUMBNAILS.md # Thumbnail & preview guide
-│   └── SECURITY.md               # Security architecture
+│   ├── SECURITY.md               # Security architecture
+│   ├── SERVICE.md                # Systemd service setup
+│   └── VIDEO_COMPRESSION.md      # Video compression guide
+├── nginx-updated-config.conf     # Nginx config template
 ├── data/
 │   └── media.db                  # SQLite database (auto-created)
 └── uploads/                      # Uploaded media files
@@ -177,9 +202,12 @@ For the admin import feature, media should be organized in:
 
 - **[Admin Panel Guide](docs/ADMIN_PANEL.md)** — How to use the admin panel for importing and managing media
 - **[Preview & Thumbnails](docs/PREVIEW_AND_THUMBNAILS.md)** — Thumbnail generation, preview gallery, selective import
+- **[Android App](docs/ANDROID.md)** — WebView приложение, сборка, установка
+- **[Admin Password](docs/ADMIN_PASSWORD.md)** — Восстановление пароля администратора
+- **[Video Compression](docs/VIDEO_COMPRESSION.md)** — Client-side compression, settings, browser support
 - **[Security Guide](docs/SECURITY.md)** — Security architecture, hardening, best practices
+- **[Service Setup](docs/SERVICE.md)** — Production setup, nginx, systemd, SSL
 - **[Technical Docs](TECHNICAL.md)** — Architecture, database schema, API reference
-- **[Deployment Guide](DEPLOY.md)** — Production setup, nginx, systemd, SSL
 
 ---
 
@@ -246,13 +274,16 @@ journalctl -u cosmogram -f
 ## 🆚 Version Comparison
 
 | Feature | 1.x | 2.0 |
-|---------|-----|-----|
+|---------|-----|------|
 | Import method | CLI only | Web UI with preview |
 | Media selection | All-or-nothing | Selective, up to 20 per post |
 | Media deletion | Whole post only | Individual photos/videos |
-| Admin controls | None | Full web panel |
+| Admin controls | None | Full-screen web panel with tabs |
 | Thumbnail quality | Pre-generated | Sharp, on-demand |
 | Comment UX | Page reload | Lightweight update |
+| Public access | No | Public gallery mode with auth banner |
+| Video compression | None | Client-side (Canvas + MediaRecorder) |
+| Mobile UX | Basic | Swipe carousel, pinch-to-zoom, pan |
 | Documentation | Minimal | Comprehensive |
 
 ---
@@ -262,6 +293,9 @@ journalctl -u cosmogram -f
 - Max 20 files per post (by design for performance)
 - Video thumbnails use first frame only
 - Import requires files organized in folders under `/opt/media/files/`
+- Client-side video compression produces silent WebM (audio track not preserved)
+- Some mobile browsers/WebViews cannot decode video via blob URL — falls back to original format
+- Pinch-to-zoom supports images only (not videos)
 
 ---
 

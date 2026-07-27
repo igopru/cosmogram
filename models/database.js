@@ -134,6 +134,13 @@ export function initDatabase() {
 
     db.exec(tables);
 
+    // Migrate: add is_public column to posts if not exists
+    try {
+        db.exec(`ALTER TABLE posts ADD COLUMN is_public INTEGER DEFAULT 1`);
+    } catch (e) {
+        // Column already exists
+    }
+
     const adminExists = db.prepare('SELECT id FROM users WHERE username = ?').get('admin');
     if (!adminExists) {
         // Generate a strong random password — force change on first login

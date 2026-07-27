@@ -5,7 +5,6 @@ import cors from 'cors';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import compression from 'compression';
-import mongoSanitize from 'express-mongo-sanitize';
 import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
@@ -22,6 +21,7 @@ import tagsRoutes from './routes/tags.js';
 import adminRoutes from './routes/admin.js';
 import { preventXSS, securityHeaders } from './middleware/security.js';
 import { validateSession } from './middleware/auth.js';
+import { optionalAuth } from './middleware/optionalAuth.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -97,7 +97,6 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
-app.use(mongoSanitize());
 app.use(preventXSS);
 app.use(securityHeaders);
 
@@ -161,14 +160,18 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/posts', validateSession, postsRoutes);
+app.use('/api/posts', optionalAuth, postsRoutes);
 app.use('/api/comments', validateSession, commentsRoutes);
-app.use('/api/likes', validateSession, likesRoutes);
+app.use('/api/likes', optionalAuth, likesRoutes);
 app.use('/api/tags', validateSession, tagsRoutes);
 app.use('/api/admin', validateSession, adminRoutes);
 
-// Frontend - главная страница
+// Frontend — главная страница и посты (для шаринга)
 app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/post/:id', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 

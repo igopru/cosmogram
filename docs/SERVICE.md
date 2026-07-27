@@ -105,6 +105,8 @@ server {
     ssl_certificate     /etc/ssl/certs/iRedMail.crt;
     ssl_certificate_key /etc/ssl/private/iRedMail.key;
 
+    client_max_body_size 55M;
+
     location / {
         proxy_pass http://10.222.0.98:8000;
 

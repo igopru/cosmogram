@@ -7,6 +7,8 @@ const db = getDB();
 
 router.post('/toggle/:postId', validateNumericParam('postId'), (req, res) => {
     try {
+        if (!req.userId) return res.status(401).json({ error: 'Authentication required' });
+
         const postId = req.params.postId;
 
         const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(postId);

@@ -42,13 +42,17 @@ export function requireAdmin(req, res, next) {
 
 export function checkPostOwner(req, res, next) {
     const db = getDB();
-    
+
+    if (!req.userId) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+
     // Validate ID is integer
     const postId = parseInt(req.params.id);
     if (isNaN(postId)) {
         return res.status(400).json({ error: 'Invalid post ID' });
     }
-    
+
     const post = db.prepare('SELECT user_id FROM posts WHERE id = ?').get(postId);
 
     if (!post) {
