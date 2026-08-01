@@ -40,3 +40,16 @@ data/.*-audit.json
 
 # of AI
 readme
+# Android build artifacts & secrets
+android/.gradle/
+android_all/.gradle/
+android/build/
+android_all/build/
+android/local.properties
+android_all/local.properties
+*.keystore
+keystore.properties
+*.apk
+
+# Test videos
+VID*.mp4

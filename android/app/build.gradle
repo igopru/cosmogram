@@ -14,10 +14,26 @@ android {
         versionName '1.0'
     }
 
+    def keystorePropertiesFile = rootProject.file('keystore.properties')
+    def keystoreProperties = new Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+    }
+
+    signingConfigs {
+        release {
+            storeFile rootProject.file('cosmogram-release.keystore')
+            storePassword keystoreProperties['PASSWORD']
+            keyAlias 'cosmogram'
+            keyPassword keystoreProperties['PASSWORD']
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig signingConfigs.release
         }
     }
 

@@ -19,6 +19,7 @@ import commentsRoutes from './routes/comments.js';
 import likesRoutes from './routes/likes.js';
 import tagsRoutes from './routes/tags.js';
 import adminRoutes from './routes/admin.js';
+import usersRoutes from './routes/users.js';
 import { preventXSS, securityHeaders } from './middleware/security.js';
 import { validateSession } from './middleware/auth.js';
 import { optionalAuth } from './middleware/optionalAuth.js';
@@ -165,6 +166,7 @@ app.use('/api/comments', validateSession, commentsRoutes);
 app.use('/api/likes', optionalAuth, likesRoutes);
 app.use('/api/tags', validateSession, tagsRoutes);
 app.use('/api/admin', validateSession, adminRoutes);
+app.use('/api/users', usersRoutes);
 
 // Frontend — главная страница и посты (для шаринга)
 app.get('/', (req, res) => {

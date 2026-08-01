@@ -27,6 +27,25 @@ cd android_all && ./gradlew assembleDebug
 # APK: android_all/app/build/outputs/apk/debug/app-debug.apk
 ```
 
+### Release-сборка (подписанный APK)
+
+```bash
+# Подписанные release APK уже в корне проекта:
+#   cosmogram.apk      — android/ (фиксированный адрес)
+#   cosmogram_all.apk  — android_all/ (выбор адреса)
+
+# Пересобрать вручную:
+cd android && ./gradlew assembleRelease
+cp app/build/outputs/apk/release/app-release.apk ../../cosmogram.apk
+```
+
+Подпись release-версий:
+- Keystore: `android/cosmogram-release.keystore` (alias `cosmogram`)
+- Пароль: в `android/keystore.properties` (файл в `.gitignore` — не коммитить!)
+- R8/ProGuard минификация включена (`minifyEnabled true`)
+
+> ⚠️ Keystore и `keystore.properties` — секреты. Потеря keystore = невозможность обновлять приложение под тем же ключом. Храните их в надёжном месте.
+
 ---
 
 ## 📱 Возможности

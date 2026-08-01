@@ -120,6 +120,18 @@ export function initDatabase() {
             )
         );
 
+        CREATE TABLE IF NOT EXISTS private_access (
+            owner_id INTEGER NOT NULL,
+            viewer_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (owner_id, viewer_id),
+            FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_private_access_owner ON private_access(owner_id);
+        CREATE INDEX IF NOT EXISTS idx_private_access_viewer ON private_access(viewer_id);
+
         CREATE INDEX IF NOT EXISTS idx_posts_user_id ON posts(user_id);
         CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at);
         CREATE INDEX IF NOT EXISTS idx_post_media_post_id ON post_media(post_id);

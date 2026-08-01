@@ -298,7 +298,7 @@ function createPostElement(post) {
             <div class="post-avatar">${getAvatarEmoji(post.username)}</div>
             <div class="post-header-info">
                 <div class="post-header-row">
-                    <div class="post-username">${escapeHtml(post.username)}</div>
+                    <div class="post-username" onclick="viewProfile(${post.user_id})" style="cursor: pointer;">${escapeHtml(post.username)}</div>
                     ${!isOwner ? `<button class="subscribe-btn ${post.is_subscribed ? 'subscribed' : ''}" onclick="toggleSubscribeUser(${post.user_id}, this)">${post.is_subscribed ? '✓ Subscribed' : '+ Follow'}</button>` : ''}
                 </div>
                 <div class="post-time">${formatDate(post.created_at)}</div>
@@ -1327,6 +1327,26 @@ function filterByTag(tagName) {
     loadFeed();
 }
 
+// Logo click — reset to the very beginning of the feed
+document.getElementById('logoLink')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const onSinglePost = getPostIdFromUrl() !== null;
+    // Reset URL from /post/:id to /
+    if (onSinglePost) {
+        history.pushState({}, '', '/');
+        // Restore the normal feed loader overridden by the single-post view
+        loadFeed = originalLoadFeed;
+    }
+    // Reset filter to All
+    if (currentFilter !== 'all') {
+        setFilter('all');
+    } else {
+        loadFeed();
+    }
+    document.title = 'Cosmogram';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
 // === Tags & Subscriptions (loadFeed is defined below) ===
 
 function showError(message) {
@@ -2001,18 +2021,7 @@ const closeProfile = document.getElementById('closeProfile');
 
 profileBtn?.addEventListener('click', () => {
     if (!currentUser) return;
-    
-    document.getElementById('profileUsername').textContent = `@${currentUser.username}`;
-    document.getElementById('profileFullname').textContent = currentUser.fullname || '';
-    document.getElementById('profileEmail').textContent = currentUser.email;
-    document.getElementById('profileAvatar').textContent = getAvatarEmoji(currentUser.username);
-    
-    // Load user stats (simplified - would need additional API endpoints)
-    document.getElementById('postsCount').textContent = currentFeed.filter(p => p.user_id === currentUser.id).length;
-    document.getElementById('followersCount').textContent = '0';
-    document.getElementById('followingCount').textContent = '0';
-    
-    profileModal.style.display = 'flex';
+    viewProfile(currentUser.id);
 });
 
 closeProfile?.addEventListener('click', () => {
@@ -2024,6 +2033,163 @@ profileModal?.addEventListener('click', (e) => {
         profileModal.style.display = 'none';
     }
 });
+
+// Open a full single post (used by profile grid + share links)
+async function openSinglePost(postId) {
+    try {
+        const res = await apiFetch(`/api/posts/${postId}`);
+        if (!res.ok) {
+            showNotification('Post not found or private');
+            return;
+        }
+        const post = await res.json();
+        profileModal.style.display = 'none';
+        const filters = document.getElementById('feedFilters');
+        if (filters) filters.style.display = 'none';
+        currentFeed = [post];
+        renderFeed();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+        showNotification('Failed to load post');
+    }
+}
+
+// View any user's profile (own or other)
+async function viewProfile(userId) {
+    if (!userId) return;
+    profileModal.style.display = 'flex';
+    document.getElementById('profileTitle').textContent = 'Profile';
+    document.getElementById('profileUsername').textContent = 'Loading...';
+    document.getElementById('profileFullname').textContent = '';
+    document.getElementById('profileEmail').textContent = '';
+    document.getElementById('profileBio').textContent = '';
+    document.getElementById('profileActions').innerHTML = '';
+    document.getElementById('privateAccessSection').style.display = 'none';
+    document.getElementById('profilePostsGrid').innerHTML =
+        '<div class="loading"><div class="loading-spinner"></div><p>Loading...</p></div>';
+
+    try {
+        const res = await apiFetch(`/api/users/${userId}`);
+        if (!res.ok) {
+            document.getElementById('profileUsername').textContent = 'Profile not found';
+            document.getElementById('profilePostsGrid').innerHTML = '';
+            return;
+        }
+        const data = await res.json();
+        const u = data.user;
+
+        document.getElementById('profileTitle').textContent = data.is_self ? 'My Profile' : `@${u.username}`;
+        document.getElementById('profileUsername').textContent = `@${u.username}`;
+        document.getElementById('profileFullname').textContent = u.fullname || '';
+        document.getElementById('profileEmail').textContent = data.is_self && currentUser ? currentUser.email : '';
+        document.getElementById('profileBio').textContent = u.bio || '';
+        document.getElementById('profileAvatar').textContent = getAvatarEmoji(u.username);
+        document.getElementById('postsCount').textContent = data.stats.posts_count;
+        document.getElementById('followersCount').textContent = data.stats.followers_count;
+        document.getElementById('followingCount').textContent = data.stats.following_count;
+
+        // Actions: follow button for others, private access for self
+        const actions = document.getElementById('profileActions');
+        actions.innerHTML = '';
+        if (data.is_self) {
+            const accessBtn = document.createElement('button');
+            accessBtn.className = 'btn btn-secondary';
+            accessBtn.textContent = '🔒 Manage private access';
+            accessBtn.onclick = () => {
+                const section = document.getElementById('privateAccessSection');
+                section.style.display = section.style.display === 'none' ? 'block' : 'none';
+                if (section.style.display === 'block') loadPrivateAccessList();
+            };
+            actions.appendChild(accessBtn);
+        } else if (currentUser) {
+            const followBtn = document.createElement('button');
+            followBtn.className = `btn ${data.is_following ? 'btn-secondary' : 'btn-primary'} subscribe-btn ${data.is_following ? 'subscribed' : ''}`;
+            followBtn.textContent = data.is_following ? '✓ Subscribed' : '+ Follow';
+            followBtn.onclick = (e) => toggleSubscribeUser(userId, e.currentTarget);
+            actions.appendChild(followBtn);
+            if (data.stats.private_posts_count > 0 && !data.viewer_has_access) {
+                const lockHint = document.createElement('p');
+                lockHint.className = 'private-access-hint';
+                lockHint.textContent = `🔒 ${data.stats.private_posts_count} private post(s) are hidden`;
+                actions.appendChild(lockHint);
+            }
+        }
+
+        // Posts grid
+        const grid = document.getElementById('profilePostsGrid');
+        if (!data.posts || data.posts.length === 0) {
+            grid.innerHTML = '<div class="empty-state"><p>No posts yet</p></div>';
+        } else {
+            grid.innerHTML = data.posts.map(p => {
+                const thumb = p.media?.[0];
+                const src = thumb?.thumbnail_url || thumb?.media_url || '';
+                const isVideo = thumb?.media_type === 'video';
+                return `
+                    <div class="profile-post-tile" onclick="openSinglePost(${p.id})">
+                        ${src
+                            ? (isVideo
+                                ? `<img src="${src}" alt="Video post" loading="lazy"><span class="tile-video-badge">▶</span>`
+                                : `<img src="${src}" alt="Post" loading="lazy">`)
+                            : `<div class="tile-text">${escapeHtml((p.description || '📝').slice(0, 60))}</div>`}
+                        ${p.is_public ? '' : '<span class="tile-private-badge">🔒</span>'}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Load private access list for own profile
+        if (data.is_self) {
+            loadPrivateAccessList();
+        }
+    } catch (e) {
+        document.getElementById('profileUsername').textContent = 'Failed to load profile';
+        document.getElementById('profilePostsGrid').innerHTML = '';
+    }
+}
+
+// Load followers with private-access status (own profile)
+async function loadPrivateAccessList() {
+    const listEl = document.getElementById('privateAccessList');
+    try {
+        const res = await apiFetch('/api/users/me/access');
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        if (!data.followers || data.followers.length === 0) {
+            listEl.innerHTML = '<p class="private-access-hint">You have no followers yet. When someone follows you, you can grant them access to your private posts.</p>';
+            return;
+        }
+        listEl.innerHTML = data.followers.map(f => `
+            <div class="private-access-item">
+                <span class="private-access-user">${getAvatarEmoji(f.username)} @${escapeHtml(f.username)}</span>
+                <button class="btn ${f.has_access ? 'btn-primary' : 'btn-secondary'} access-toggle-btn"
+                        onclick="togglePrivateAccess(${f.id}, this)">
+                    ${f.has_access ? '✅ Access granted' : '🔒 Grant access'}
+                </button>
+            </div>
+        `).join('');
+    } catch (e) {
+        listEl.innerHTML = '<p class="private-access-hint">Failed to load followers</p>';
+    }
+}
+
+// Grant/revoke private access to a follower
+async function togglePrivateAccess(viewerId, btn) {
+    const hasAccess = btn.textContent.includes('granted');
+    btn.disabled = true;
+    try {
+        const res = await apiFetch(`/api/users/me/access/${viewerId}`, {
+            method: hasAccess ? 'DELETE' : 'POST'
+        });
+        if (!res.ok) throw new Error('Failed');
+        btn.disabled = false;
+        btn.className = `btn ${hasAccess ? 'btn-secondary' : 'btn-primary'} access-toggle-btn`;
+        btn.textContent = hasAccess ? '🔒 Grant access' : '✅ Access granted';
+        showNotification(hasAccess ? 'Access revoked' : 'Access granted — user can now see your private posts');
+    } catch (e) {
+        btn.disabled = false;
+        showNotification('Failed to update access');
+    }
+}
 
 // Dark theme
 const themeToggle = document.getElementById('themeToggle');
@@ -2199,10 +2365,12 @@ function getPostIdFromUrl() {
     return match ? parseInt(match[1], 10) : null;
 }
 
+// Saved original feed loader — restored when logo resets the view
+const originalLoadFeed = loadFeed;
+
 const sharedPostId = getPostIdFromUrl();
 if (sharedPostId) {
     // Override loadFeed to load single post instead
-    const origLoadFeed = loadFeed;
     loadFeed = async function() {
         const feed = document.getElementById('feed');
         const filters = document.getElementById('feedFilters');

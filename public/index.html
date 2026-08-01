@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Media Gallery</title>
+    <title>Cosmogram</title>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="app">
         <header class="header">
-            <h1>MediaGallery</h1>
+            <h1><a href="/" id="logoLink" title="Go to feed">Cosmogram</a></h1>
             <div class="header-actions">
                 <button id="themeToggle" title="Toggle theme">🌙</button>
                 <button id="adminBtn" style="display: none;" title="Admin Panel">⚙️</button>
@@ -128,7 +128,7 @@
             <div id="profileModal" class="modal" style="display: none;">
                 <div class="modal-content profile-content">
                     <div class="modal-header">
-                        <h2>Profile</h2>
+                        <h2 id="profileTitle">Profile</h2>
                         <button class="modal-close" id="closeProfile">&times;</button>
                     </div>
                     <div class="profile-info">
@@ -136,6 +136,7 @@
                         <h3 id="profileUsername"></h3>
                         <p id="profileFullname" class="profile-fullname"></p>
                         <p id="profileEmail" class="profile-email"></p>
+                        <p id="profileBio" class="profile-bio"></p>
                         <div class="profile-stats">
                             <div class="stat">
                                 <span id="postsCount">0</span>
@@ -150,6 +151,16 @@
                                 <span>Following</span>
                             </div>
                         </div>
+                        <div id="profileActions"></div>
+                    </div>
+                    <div id="privateAccessSection" style="display: none;">
+                        <h4>🔒 Private access</h4>
+                        <p class="private-access-hint">Grant family/private photos access to selected followers. Only you decide who can see your private posts.</p>
+                        <div id="privateAccessList"></div>
+                    </div>
+                    <div class="profile-posts">
+                        <h4>Posts</h4>
+                        <div id="profilePostsGrid" class="profile-posts-grid"></div>
                     </div>
                 </div>
             </div>

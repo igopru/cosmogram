@@ -44,6 +44,12 @@ Cosmogram is a self-hosted media gallery server for personal and team use. Uploa
 - **Login/register banner** — shown to guests with contextual CTA
 - **Shareable post links** — `GET /post/:id` for individual posts (respects privacy)
 
+### 👤 User Profiles & Private Posts
+- **User profiles** — click any username to view their profile, stats and posts grid
+- **Private posts** — family/private photos visible only to the author, admins and manually granted followers
+- **Private access control** — grant/revoke access per follower in your profile (🔒 Manage private access)
+- **Visibility enforcement** — applied in feed, single-post view and profiles
+
 ### 🗑️ Granular Control
 - **Delete individual media** — remove specific photos/videos from posts
 - **Delete entire posts** — with confirmation and cascade cleanup
@@ -123,6 +129,7 @@ cosmogram/
 │   ├── comments.js          # Comments management
 │   ├── likes.js             # Likes management
 │   ├── tags.js              # Tags & subscriptions
+│   ├── users.js             # User profiles & private access
 │   └── admin.js             # Admin panel API
 ├── public/
 │   ├── index.html           # Frontend HTML
@@ -148,6 +155,7 @@ cosmogram/
 │   ├── ADMIN_PASSWORD.md         # Password reset guide
 │   ├── ANDROID.md                # Android app build guide
 │   ├── PREVIEW_AND_THUMBNAILS.md # Thumbnail & preview guide
+│   ├── PRIVACY.md                # User profiles & private access
 │   ├── SECURITY.md               # Security architecture
 │   ├── SERVICE.md                # Systemd service setup
 │   └── VIDEO_COMPRESSION.md      # Video compression guide
@@ -204,6 +212,7 @@ For the admin import feature, media should be organized in:
 - **[Preview & Thumbnails](docs/PREVIEW_AND_THUMBNAILS.md)** — Thumbnail generation, preview gallery, selective import
 - **[Android App](docs/ANDROID.md)** — WebView приложение, сборка, установка
 - **[Admin Password](docs/ADMIN_PASSWORD.md)** — Восстановление пароля администратора
+- **[Privacy & Profiles](docs/PRIVACY.md)** — User profiles, private posts, access management
 - **[Video Compression](docs/VIDEO_COMPRESSION.md)** — Client-side compression, settings, browser support
 - **[Security Guide](docs/SECURITY.md)** — Security architecture, hardening, best practices
 - **[Service Setup](docs/SERVICE.md)** — Production setup, nginx, systemd, SSL

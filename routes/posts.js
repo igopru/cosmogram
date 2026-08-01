@@ -162,9 +162,13 @@ router.get('/feed', (req, res) => {
         const userId = req.userId;
         const isAuth = userId !== null && userId !== undefined;
 
-        // For unauthenticated users, only show public posts
-        // For authenticated users, show all posts
-        const publicFilter = isAuth ? '1=1' : 'p.is_public = 1';
+        // Visibility: public posts always; own posts and granted-private posts for authenticated users
+        const visibilityClause = isAuth
+            ? `(p.is_public = 1 OR p.user_id = ? OR EXISTS(
+                  SELECT 1 FROM private_access pa WHERE pa.owner_id = p.user_id AND pa.viewer_id = ?
+               ))`
+            : 'p.is_public = 1';
+        const visParams = isAuth ? [userId, userId] : [];
 
         let query, params;
 
@@ -182,7 +186,7 @@ router.get('/feed', (req, res) => {
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 WHERE u.active = 1
-                  AND ${publicFilter}
+                  AND ${visibilityClause}
                   AND EXISTS(
                       SELECT 1 FROM subscriptions s 
                       WHERE s.follower_id = ? AND s.following_user_id = p.user_id
@@ -190,7 +194,7 @@ router.get('/feed', (req, res) => {
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = [userId, userId, userId];
+            params = [userId, userId, userId, ...visParams];
         } else if (filter.startsWith('tag:')) {
             const tagName = filter.substring(4);
             query = `
@@ -205,11 +209,11 @@ router.get('/feed', (req, res) => {
                 JOIN post_tags pt ON p.id = pt.post_id
                 JOIN tags t ON pt.tag_id = t.id
                 WHERE u.active = 1 AND t.name = ?
-                  AND ${publicFilter}
+                  AND ${visibilityClause}
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = isAuth ? [userId, userId, tagName] : [tagName];
+            params = isAuth ? [userId, userId, tagName, ...visParams] : [tagName];
         } else {
             query = `
                 SELECT p.id, p.user_id, p.description, p.allow_comments, p.created_at, p.updated_at, p.is_public,
@@ -221,11 +225,11 @@ router.get('/feed', (req, res) => {
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 WHERE u.active = 1
-                  AND ${publicFilter}
+                  AND ${visibilityClause}
                 ORDER BY p.created_at DESC
                 LIMIT 50
             `;
-            params = isAuth ? [userId, userId] : [];
+            params = isAuth ? [userId, userId, ...visParams] : [];
         }
 
         const posts = db.prepare(query).all(...params);
@@ -320,8 +324,18 @@ router.get('/:id', optionalAuth, validateNumericParam('id'), (req, res) => {
             return res.status(404).json({ error: 'Post not found' });
         }
 
-        if (!isAuth && !post.is_public) {
-            return res.status(404).json({ error: 'Post not found' });
+        // Private post visibility: owner, admins and users granted private access
+        if (!post.is_public) {
+            const canView = isAuth && (
+                Number(post.user_id) === Number(userId) ||
+                req.user?.role === 'admin' ||
+                db.prepare(
+                    'SELECT 1 FROM private_access WHERE owner_id = ? AND viewer_id = ?'
+                ).get(post.user_id, userId)
+            );
+            if (!canView) {
+                return res.status(404).json({ error: 'Post not found' });
+            }
         }
 
         const baseUrl = `//${req.hostname}`;
